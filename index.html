@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshTracker Dashboard</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      window.tailwind = window.tailwind || {};
+      window.tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#11d432",
+              "background-light": "#f6f8f6",
+              "background-dark": "#102213"
+            },
+            fontFamily: {
+              display: ["Plus Jakarta Sans", "sans-serif"]
+            },
+            borderRadius: {
+              DEFAULT: "0.5rem",
+              lg: "0.5rem",
+              xl: "0.75rem",
+              "2xl": "1rem",
+              full: "9999px"
+            }
+          }
+        }
+      };
+    </script>
+    <style>
+      body {
+        min-height: max(884px, 100dvh);
+        font-family: "Plus Jakarta Sans", sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(17, 212, 50, 0.12), transparent 35%),
+          #f6f8f6;
+      }
+
+      .material-symbols-outlined {
+        font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+      }
+
+      .boot-error {
+        margin: 24px auto;
+        max-width: 420px;
+        border: 1px solid #fecaca;
+        border-radius: 16px;
+        background: #fff1f2;
+        color: #991b1b;
+        padding: 16px;
+        font-size: 14px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body class="bg-background-light text-slate-900">
+    <div id="app"></div>
+    <script>
+      window.addEventListener("error", (event) => {
+        const app = document.getElementById("app");
+        if (!app) {
+          return;
+        }
+
+        app.innerHTML = `
+          <div class="boot-error">
+            <strong>Page failed to load.</strong>\n\n${String(event.message || "Unknown error")}
+          </div>
+        `;
+      });
+    </script>
+    <script src="./uiData.js"></script>
+    <script src="./ui.js"></script>
+  </body>
+</html>
