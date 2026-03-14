@@ -1,0 +1,283 @@
+(function initFreshTrackerSettings(global) {
+  const DEFAULT_SETTINGS = {
+    trashAutoDeleteDays: 7,
+    reminderStrategy: "standard",
+    theme: "light"
+  };
+  const trashRetentionOptions = [7, 14, 30];
+  const reminderStrategies = [
+    {
+      id: "light",
+      badge: "Minimal",
+      name: "Light Reminder",
+      description: "7/1 days before and day of. Best for users who check the app daily.",
+      shortLabel: "Light",
+      isDefault: false
+    },
+    {
+      id: "standard",
+      badge: "Recommended",
+      name: "Standard Reminder",
+      description: "7/3/1 days before and day of, plus cleanup reminders. Our most popular choice.",
+      shortLabel: "Standard",
+      isDefault: true
+    },
+    {
+      id: "high",
+      badge: "Maximum Awareness",
+      name: "High Frequency",
+      description: "Starts 7 days before, constant reminders after expiration. Ensure zero waste.",
+      shortLabel: "High",
+      isDefault: false
+    }
+  ];
+
+  function renderSettingsPage(state, escapeHtml, appVersion) {
+    const strategy = getReminderStrategy(state.settings.reminderStrategy);
+
+    return `
+      <header class="sticky top-0 z-10 border-b border-slate-100 bg-white/80 px-4 py-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
+        <div class="flex items-center justify-between">
+          <button type="button" data-nav-view="dashboard" class="group flex items-center gap-2">
+            <div class="rounded-lg bg-primary p-1.5 text-white">
+              <span class="material-symbols-outlined block text-xl">restaurant</span>
+            </div>
+            <h2 class="text-lg font-bold tracking-tight transition-colors group-hover:text-primary">FreshTracker</h2>
+          </button>
+          <button
+            type="button"
+            id="open-reminder-settings-icon"
+            class="relative rounded-full p-2 text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            <span class="material-symbols-outlined">notifications</span>
+            <span class="absolute right-2 top-2 flex h-2 w-2 rounded-full bg-primary"></span>
+          </button>
+        </div>
+      </header>
+      <main class="flex-1 overflow-y-auto pb-28">
+        <div class="px-4 pb-2 pt-6">
+          <h1 class="text-3xl font-bold tracking-tight">Settings</h1>
+        </div>
+        <section class="mt-6">
+          <div class="px-4 py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account / Profile</div>
+          <div class="mx-4 flex items-center gap-4 rounded-xl bg-slate-50 p-4 transition-colors hover:bg-slate-100 dark:bg-slate-800/50 dark:hover:bg-slate-800">
+            <div class="relative size-12 overflow-hidden rounded-full border-2 border-primary/20">
+              <div class="flex h-full w-full items-center justify-center bg-primary/10 text-lg font-bold text-primary">AC</div>
+            </div>
+            <div class="flex-1">
+              <h4 class="font-bold">Alex Chen</h4>
+              <p class="text-sm text-slate-500">alex.chen@freshtracker.app</p>
+            </div>
+            <span class="material-symbols-outlined text-slate-400">chevron_right</span>
+          </div>
+        </section>
+        <section class="mt-8">
+          <div class="flex items-center gap-2 px-4 py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            <span class="material-symbols-outlined text-sm">delete_sweep</span> Trash Settings
+          </div>
+          <div class="px-4">
+            <div class="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/50">
+              <div class="mb-4 flex items-center justify-between">
+                <span class="text-slate-700 dark:text-slate-200">Auto-delete after <span class="block text-xs text-slate-400">Trash cleanup schedule</span></span>
+              </div>
+              <div class="grid grid-cols-3 gap-2">
+                ${trashRetentionOptions.map((days) => renderTrashOption(state, days)).join("")}
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="mt-8 px-4">
+          <div class="py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Notification Settings</div>
+          <div class="overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-800/50">
+            <button
+              type="button"
+              id="open-reminder-settings"
+              class="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-700"
+            >
+              <div class="flex flex-col items-start">
+                <span class="font-medium text-slate-700 dark:text-slate-200">Reminder Strategy</span>
+                <span class="text-xs text-slate-400">Reminder strategy</span>
+                <span class="mt-1 rounded bg-primary/20 px-2 py-0.5 text-[10px] font-bold uppercase text-primary">${escapeHtml(strategy.shortLabel)}</span>
+              </div>
+              <span class="material-symbols-outlined text-slate-400">arrow_forward_ios</span>
+            </button>
+          </div>
+        </section>
+        <section class="mt-8 px-4">
+          <div class="py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">General</div>
+          <div class="overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-800/50">
+            <div class="flex items-center justify-between border-b border-slate-100 p-4 dark:border-slate-800">
+              <div class="flex items-center gap-3">
+                <span class="material-symbols-outlined text-slate-400">language</span>
+                <span class="text-slate-700 dark:text-slate-200">Language</span>
+              </div>
+              <span class="text-sm font-medium text-primary">English</span>
+            </div>
+            <button type="button" id="theme-toggle" class="flex w-full items-center justify-between p-4 text-left">
+              <div class="flex items-center gap-3">
+                <span class="material-symbols-outlined text-slate-400">dark_mode</span>
+                <span class="text-slate-700 dark:text-slate-200">Theme</span>
+              </div>
+              <span class="flex w-12 items-center rounded-full bg-slate-200 p-1 transition dark:bg-slate-700">
+                <span class="size-4 rounded-full bg-white shadow-sm transition-transform ${state.settings.theme === "dark" ? "translate-x-6 bg-primary" : "translate-x-0"}"></span>
+              </span>
+            </button>
+          </div>
+        </section>
+        <section class="mt-8 px-4">
+          <div class="py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">About & Support</div>
+          <div class="overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-800/50">
+            <a href="https://openai.com" target="_blank" rel="noreferrer" class="flex items-center justify-between border-b border-slate-100 p-4 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:hover:bg-slate-700">
+              <span class="text-slate-700 dark:text-slate-200">Help Center</span>
+              <span class="material-symbols-outlined text-sm text-slate-400">open_in_new</span>
+            </a>
+            <div class="flex items-center justify-between p-4">
+              <span class="text-slate-700 dark:text-slate-200">App Version</span>
+              <span class="font-mono text-sm text-slate-400">v${escapeHtml(appVersion)}</span>
+            </div>
+          </div>
+        </section>
+        <div class="mt-8 px-4">
+          <button type="button" id="restore-settings-defaults" class="w-full rounded-xl border border-primary/20 bg-primary/5 py-3 font-bold text-primary transition-colors hover:bg-primary/10">
+            Restore Defaults
+          </button>
+        </div>
+        <div class="mt-4 px-4">
+          <button type="button" class="w-full rounded-xl border-2 border-slate-100 py-3 font-bold text-red-500 transition-colors hover:bg-red-50 dark:border-slate-800">
+            Log Out
+          </button>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderTrashOption(state, days) {
+    const active = state.settings.trashAutoDeleteDays === days;
+    const classes = active
+      ? "border-primary bg-primary/10 text-primary font-bold"
+      : "border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400";
+
+    return `
+      <button
+        type="button"
+        data-trash-days="${days}"
+        class="rounded-lg border-2 px-3 py-2 text-sm ${classes}"
+      >
+        ${days} Days
+      </button>
+    `;
+  }
+
+  function renderNotificationSettingsPage(state, escapeHtml) {
+    const selected = state.reminderDraft || state.settings.reminderStrategy;
+
+    return `
+      <div class="flex min-h-screen flex-col bg-background-light dark:bg-background-dark">
+        <div class="sticky top-0 z-10 flex items-center border-b border-primary/10 bg-white p-4 dark:bg-background-dark/50">
+          <button type="button" id="back-to-settings" class="flex size-10 shrink-0 items-center text-slate-900 dark:text-slate-100">
+            <span class="material-symbols-outlined">arrow_back</span>
+          </button>
+          <h2 class="ml-2 flex-1 text-lg font-bold leading-tight tracking-tight">Notification Settings</h2>
+          <div class="flex w-10 items-center justify-end">
+            <button type="button" class="flex h-10 w-10 items-center justify-center rounded-lg bg-transparent">
+              <span class="material-symbols-outlined">notifications_active</span>
+            </button>
+          </div>
+        </div>
+        <div class="px-4 pb-2 pt-6">
+          <h3 class="text-xl font-bold leading-tight tracking-tight">Reminder Strategy</h3>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Choose how often you want to be notified about expiring food items.</p>
+        </div>
+        <div class="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pb-32">
+          ${reminderStrategies.map((strategy) => renderReminderStrategyCard(strategy, selected, escapeHtml)).join("")}
+        </div>
+        <div class="border-t border-primary/10 bg-white p-4 dark:bg-background-dark/80">
+          <button
+            type="button"
+            id="save-reminder-settings"
+            class="w-full rounded-xl bg-slate-900 py-3 font-bold text-white shadow-lg transition-transform active:scale-95 dark:bg-primary"
+          >
+            Save Preferences
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderReminderStrategyCard(strategy, selectedId, escapeHtml) {
+    const active = selectedId === strategy.id;
+    const shellClasses = active
+      ? "border-2 border-primary shadow-md"
+      : "border border-primary/10 shadow-sm transition-colors hover:border-primary/40";
+    const buttonClasses = active
+      ? "bg-primary text-white"
+      : "bg-slate-100 text-slate-900 transition-all hover:bg-primary hover:text-white dark:bg-slate-800 dark:text-slate-100";
+    const icon = active ? "check_circle" : "circle";
+    const iconColor = active ? "text-primary" : "text-slate-300";
+    const cta = active ? "Selected" : "Select Strategy";
+
+    return `
+      <div class="group relative flex flex-col overflow-hidden rounded-xl bg-white dark:bg-slate-900/40 ${shellClasses}">
+        ${strategy.isDefault ? '<div class="absolute right-12 top-4 z-10 rounded-full bg-primary px-2 py-1 text-[10px] font-bold uppercase tracking-tighter text-white">Default</div>' : ""}
+        <div class="flex w-full flex-col gap-1 p-4">
+          <div class="flex items-start justify-between">
+            <div>
+              <p class="mb-1 text-xs font-bold uppercase tracking-wider text-primary">${escapeHtml(strategy.badge)}</p>
+              <p class="text-lg font-bold text-slate-900 dark:text-slate-100">${escapeHtml(strategy.name)}</p>
+            </div>
+            <span class="material-symbols-outlined ${iconColor}">${icon}</span>
+          </div>
+          <p class="mt-1 text-sm leading-relaxed text-slate-600 dark:text-slate-400">${escapeHtml(strategy.description)}</p>
+          <div class="mt-4">
+            <button
+              type="button"
+              data-reminder-strategy="${strategy.id}"
+              class="w-full rounded-lg px-4 py-2.5 text-sm font-bold ${buttonClasses}"
+            >
+              ${cta}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function getReminderStrategy(strategyId) {
+    return reminderStrategies.find((strategy) => strategy.id === strategyId) || reminderStrategies[1];
+  }
+
+  function getDefaultSettings() {
+    return { ...DEFAULT_SETTINGS };
+  }
+
+  function normalizeSettings(settings) {
+    const parsed = settings && typeof settings === "object" ? settings : {};
+
+    return {
+      trashAutoDeleteDays: trashRetentionOptions.includes(parsed.trashAutoDeleteDays)
+        ? parsed.trashAutoDeleteDays
+        : DEFAULT_SETTINGS.trashAutoDeleteDays,
+      reminderStrategy: reminderStrategies.some((strategy) => strategy.id === parsed.reminderStrategy)
+        ? parsed.reminderStrategy
+        : DEFAULT_SETTINGS.reminderStrategy,
+      theme: parsed.theme === "dark" ? "dark" : DEFAULT_SETTINGS.theme
+    };
+  }
+
+  function applyTheme(settings) {
+    const isDark = settings.theme === "dark";
+    document.documentElement.classList.toggle("dark", isDark);
+    document.body.classList.toggle("dark", isDark);
+  }
+
+  global.FreshTrackerSettings = {
+    getDefaultSettings,
+    normalizeSettings,
+    trashRetentionOptions,
+    reminderStrategies,
+    renderSettingsPage,
+    renderNotificationSettingsPage,
+    getReminderStrategy,
+    applyTheme
+  };
+})(window);

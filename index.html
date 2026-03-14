@@ -53,6 +53,28 @@
         font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
       }
 
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 4px;
+      }
+
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #11d43233;
+        border-radius: 10px;
+      }
+
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+
       .boot-error {
         margin: 24px auto;
         max-width: 420px;
@@ -84,6 +106,9 @@
       });
     </script>
     <script src="./uiData.js"></script>
+    <script src="./setting.js"></script>
+    <script src="./add.js"></script>
+    <script src="./trash.js"></script>
     <script src="./ui.js"></script>
   </body>
 </html>

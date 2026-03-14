@@ -153,12 +153,61 @@ function deleteFoodItemOnServer(id) {
   });
 }
 
+function fetchSettings() {
+  return request("/api/settings");
+}
+
+function updateSettingsOnServer(settings) {
+  return request("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+function resetSettingsOnServer() {
+  return request("/api/settings", {
+    method: "DELETE"
+  });
+}
+
+function fetchTrashItems() {
+  return request("/api/trash");
+}
+
+function createTrashItemOnServer(item) {
+  return request("/api/trash", {
+    method: "POST",
+    body: JSON.stringify(item)
+  });
+}
+
+function deleteTrashItemOnServer(id) {
+  return request(`/api/trash/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+function emptyTrashOnServer() {
+  return request("/api/trash", {
+    method: "DELETE"
+  });
+}
+
 window.FreshTrackerData = {
   DAY_MS,
+  formatDisplayDate,
+  getExpiryMeta,
   fetchFoodItems,
   createFoodItem,
   createFoodItemOnServer,
   updateFoodItemOnServer,
   deleteFoodItemOnServer,
+  fetchSettings,
+  updateSettingsOnServer,
+  resetSettingsOnServer,
+  fetchTrashItems,
+  createTrashItemOnServer,
+  deleteTrashItemOnServer,
+  emptyTrashOnServer,
   getDashboardModel
 };
