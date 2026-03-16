@@ -135,7 +135,7 @@
         <section class="mt-8 px-4">
           <div class="py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">About & Support</div>
           <div class="overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-800/50">
-            <a href="https://openai.com" target="_blank" rel="noreferrer" class="flex items-center justify-between border-b border-slate-100 p-4 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:hover:bg-slate-700">
+            <a href="./SUPPORT.md" target="_blank" rel="noreferrer" class="flex items-center justify-between border-b border-slate-100 p-4 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:hover:bg-slate-700">
               <span class="text-slate-700 dark:text-slate-200">Help Center</span>
               <span class="material-symbols-outlined text-sm text-slate-400">open_in_new</span>
             </a>
