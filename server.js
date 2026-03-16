@@ -424,7 +424,8 @@ function mapCategory(primaryTag, fallbackLabel) {
   return "other";
 }
 
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, url) {
+  const pathname = url.pathname;
   if (pathname === "/api/settings" && req.method === "GET") {
     return sendJson(res, 200, await readSettings());
   }
@@ -496,15 +497,7 @@ async function handleApi(req, res, pathname) {
     const store = await readAccountStore();
     const exists = store.users.find((entry) => normalizeEmail(entry.email) === email);
     if (exists) {
-      store.currentEmail = email;
-      await writeAccountStore(store);
-      return sendJson(res, 200, {
-        authenticated: true,
-        user: {
-          email,
-          name: String(exists.name || getDisplayNameFromEmail(email)).trim()
-        }
-      });
+      return sendJson(res, 409, { error: "This email is already registered. Please log in instead." });
     }
 
     const user = {
@@ -542,6 +535,17 @@ async function handleApi(req, res, pathname) {
     const store = await readAccountStore();
     store.currentEmail = "";
     await writeAccountStore(store);
+    return sendJson(res, 200, { authenticated: false, user: null });
+  }
+
+  if (pathname === "/api/auth/account" && req.method === "DELETE") {
+    const store = await readAccountStore();
+    const currentEmail = normalizeEmail(store.currentEmail);
+    if (!currentEmail) {
+      return sendJson(res, 404, { error: "No signed-in account to delete." });
+    }
+
+    await fs.writeFile(ACCOUNT_PATH, "", "utf8");
     return sendJson(res, 200, { authenticated: false, user: null });
   }
 
@@ -631,7 +635,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url.pathname);
+      await handleApi(req, res, url);
       return;
     }
 

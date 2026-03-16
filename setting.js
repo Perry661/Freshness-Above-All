@@ -163,6 +163,11 @@
                 Log Out
               </button>
             </div>
+            <div class="mt-3 px-4">
+              <button type="button" id="delete-account" class="w-full rounded-xl border border-red-200 bg-red-50 py-3 font-bold text-red-600 transition-colors hover:bg-red-100 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-400">
+                Delete Account
+              </button>
+            </div>
           `
           : ""}
       </main>

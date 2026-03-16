@@ -207,6 +207,12 @@ function logoutSession() {
   });
 }
 
+function deleteCurrentAccount() {
+  return request("/api/auth/account", {
+    method: "DELETE"
+  });
+}
+
 function updateSettingsOnServer(settings) {
   return request("/api/settings", {
     method: "PUT",
@@ -276,6 +282,7 @@ window.FreshTrackerData = {
   registerWithEmail,
   loginWithEmail,
   logoutSession,
+  deleteCurrentAccount,
   updateSettingsOnServer,
   resetSettingsOnServer,
   fetchAddSettings,

@@ -21,6 +21,7 @@ const {
   registerWithEmail: registerWithEmailFromApi,
   loginWithEmail: loginWithEmailFromApi,
   logoutSession: logoutSessionFromApi,
+  deleteCurrentAccount: deleteCurrentAccountFromApi,
   createFoodItem: buildFoodItem,
   createFoodItemOnServer: createFoodItemInApi,
   updateFoodItemOnServer: updateFoodItemInApi,
@@ -611,6 +612,15 @@ async function handleClick(event) {
 
   if (event.target.closest("#log-out")) {
     void handleLogout();
+    return;
+  }
+
+  if (event.target.closest("#delete-account")) {
+    const confirmed = window.confirm("Delete this local account from this device? This will sign you out.");
+    if (!confirmed) {
+      return;
+    }
+    void handleDeleteAccount();
     return;
   }
 
@@ -2296,6 +2306,19 @@ async function handleAuthSubmit() {
 async function handleLogout() {
   try {
     state.account = await logoutSessionFromApi();
+  } catch (error) {
+    state.authError = error.message;
+  }
+
+  state.showAuthSheet = false;
+  state.authEmail = "";
+  state.authError = "";
+  renderApp();
+}
+
+async function handleDeleteAccount() {
+  try {
+    state.account = await deleteCurrentAccountFromApi();
   } catch (error) {
     state.authError = error.message;
   }
