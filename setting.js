@@ -35,6 +35,10 @@
 
   function renderSettingsPage(state, escapeHtml, appVersion) {
     const strategy = getReminderStrategy(state.settings.reminderStrategy);
+    const account = state.account || { authenticated: false, user: null };
+    const initials = account.authenticated
+      ? getAccountInitials(account.user?.name || account.user?.email || "")
+      : "";
 
     return `
       <header class="sticky top-0 z-10 border-b border-primary/10 bg-white/95 px-4 py-4 backdrop-blur-md dark:bg-background-dark/95">
@@ -53,16 +57,18 @@
         </div>
         <section class="mt-6">
           <div class="px-4 py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account / Profile</div>
-          <div class="mx-4 flex items-center gap-4 rounded-xl bg-slate-50 p-4 transition-colors hover:bg-slate-100 dark:bg-slate-800/50 dark:hover:bg-slate-800">
+          <button type="button" id="open-auth-sheet" class="mx-4 flex w-[calc(100%-2rem)] items-center gap-4 rounded-xl bg-slate-50 p-4 text-left transition-colors hover:bg-slate-100 dark:bg-slate-800/50 dark:hover:bg-slate-800">
             <div class="relative size-12 overflow-hidden rounded-full border-2 border-primary/20">
-              <div class="flex h-full w-full items-center justify-center bg-primary/10 text-lg font-bold text-primary">AC</div>
+              ${account.authenticated
+                ? `<div class="flex h-full w-full items-center justify-center bg-primary/10 text-lg font-bold text-primary">${escapeHtml(initials)}</div>`
+                : `<div class="flex h-full w-full items-center justify-center bg-slate-200/80 text-slate-400 dark:bg-slate-700/80 dark:text-slate-300"><span class="material-symbols-outlined text-[30px]">account_circle</span></div>`}
             </div>
             <div class="flex-1">
-              <h4 class="font-bold">Alex Chen</h4>
-              <p class="text-sm text-slate-500">alex.chen@freshtracker.app</p>
+              <h4 class="font-bold">${account.authenticated ? escapeHtml(account.user?.name || "Account") : "Login or Sign Up"}</h4>
+              <p class="text-sm text-slate-500">${account.authenticated ? escapeHtml(account.user?.email || "") : "Use your email to sign in"}</p>
             </div>
             <span class="material-symbols-outlined text-slate-400">chevron_right</span>
-          </div>
+          </button>
         </section>
         <section class="mt-8">
           <div class="flex items-center gap-2 px-4 py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
@@ -135,7 +141,7 @@
         <section class="mt-8 px-4">
           <div class="py-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">About & Support</div>
           <div class="overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-800/50">
-            <a href="./SUPPORT.md" target="_blank" rel="noreferrer" class="flex items-center justify-between border-b border-slate-100 p-4 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:hover:bg-slate-700">
+            <a href="https://github.com/Perry661/Freshness-Above-All/blob/main/SUPPORT.md" target="_blank" rel="noreferrer" class="flex items-center justify-between border-b border-slate-100 p-4 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:hover:bg-slate-700">
               <span class="text-slate-700 dark:text-slate-200">Help Center</span>
               <span class="material-symbols-outlined text-sm text-slate-400">open_in_new</span>
             </a>
@@ -150,12 +156,62 @@
             Restore Defaults
           </button>
         </div>
-        <div class="mt-4 px-4">
-          <button type="button" class="w-full rounded-xl border-2 border-slate-100 py-3 font-bold text-red-500 transition-colors hover:bg-red-50 dark:border-slate-800">
-            Log Out
-          </button>
-        </div>
+        ${account.authenticated
+          ? `
+            <div class="mt-4 px-4">
+              <button type="button" id="log-out" class="w-full rounded-xl border-2 border-slate-100 py-3 font-bold text-red-500 transition-colors hover:bg-red-50 dark:border-slate-800">
+                Log Out
+              </button>
+            </div>
+          `
+          : ""}
       </main>
+      ${state.showAuthSheet ? renderAuthSheet(state, escapeHtml) : ""}
+    `;
+  }
+
+  function renderAuthSheet(state, escapeHtml) {
+    const loginActive = state.authMode !== "register";
+    const title = loginActive ? "Login" : "Sign Up";
+    const subtitle = loginActive
+      ? "Use an email you've already registered on this device."
+      : "Create a local account with your email.";
+
+    return `
+      <div id="auth-sheet-overlay" class="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-0">
+        <div class="sheet-enter w-full max-w-lg overflow-hidden rounded-t-[32px] bg-white shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.3)] dark:bg-slate-900">
+          <div class="flex h-8 w-full items-center justify-center pt-3">
+            <div class="h-1.5 w-12 rounded-full bg-slate-200 dark:bg-slate-700"></div>
+          </div>
+          <div class="px-6 pb-8 pt-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100">${title}</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">${subtitle}</p>
+              </div>
+              <button type="button" id="close-auth-sheet" class="rounded-full p-2 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800">
+                <span class="material-symbols-outlined text-slate-400">close</span>
+              </button>
+            </div>
+            <div class="mt-6 grid grid-cols-2 gap-3 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800">
+              <button type="button" data-auth-mode="login" class="rounded-xl px-4 py-2 text-sm font-semibold ${loginActive ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 dark:text-slate-300"}">Login</button>
+              <button type="button" data-auth-mode="register" class="rounded-xl px-4 py-2 text-sm font-semibold ${!loginActive ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 dark:text-slate-300"}">Sign Up</button>
+            </div>
+            <form id="auth-form" class="mt-6 space-y-4">
+              <label class="grid gap-2">
+                <span class="text-sm font-bold uppercase tracking-wider text-slate-500">Email</span>
+                <input id="auth-email-input" name="authEmail" type="email" value="${escapeHtml(state.authEmail || "")}" required class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-primary focus:bg-white dark:border-slate-700 dark:bg-slate-800" placeholder="you@example.com" />
+              </label>
+              ${state.authError
+                ? `<div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">${escapeHtml(state.authError)}</div>`
+                : ""}
+              <button type="submit" class="w-full rounded-xl bg-primary py-4 font-bold text-slate-900 shadow-lg shadow-primary/20 transition-opacity hover:opacity-90">
+                ${loginActive ? "Login with Email" : "Create Account"}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
     `;
   }
 
@@ -255,6 +311,20 @@
 
   function getDefaultSettings() {
     return { ...DEFAULT_SETTINGS };
+  }
+
+  function getAccountInitials(value) {
+    const parts = String(value || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!parts.length) {
+      return "U";
+    }
+    return parts
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join("");
   }
 
   function normalizeSettings(settings) {

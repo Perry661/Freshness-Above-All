@@ -73,9 +73,9 @@
                 <span class="material-symbols-outlined text-[42px]">edit_note</span>
                 <span class="text-[18px] font-bold leading-none">Manual Entry</span>
               </button>
-              <button data-entry-method="scan" class="entry-method-btn flex min-h-[168px] flex-col items-center justify-center gap-5 rounded-[24px] border-2 p-5 transition-all">
-                <span class="material-symbols-outlined text-[42px]">barcode</span>
-                <span class="text-[18px] font-bold leading-none">Scan Barcode</span>
+              <button data-entry-method="photo" class="entry-method-btn flex min-h-[168px] flex-col items-center justify-center gap-5 rounded-[24px] border-2 p-5 transition-all">
+                <span class="material-symbols-outlined text-[42px]">photo_camera</span>
+                <span class="text-[18px] font-bold leading-none">Photo / Scan</span>
               </button>
             </div>
 
@@ -216,6 +216,207 @@
             <button ${state.saving ? "disabled" : ""} form="add-food-form" class="w-full rounded-xl bg-primary py-4 font-bold text-slate-900 shadow-lg shadow-primary/20 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">
               ${cta}
             </button>
+          </div>
+        </div>
+        <input id="photo-file-input" type="file" accept="image/*" capture="environment" multiple class="hidden" />
+        ${state.photoToolSheetOpen ? renderPhotoToolSheet() : ""}
+        ${state.photoCaptureOpen ? renderPhotoCaptureSheet(state, escapeHtml) : ""}
+        ${state.photoReviewOpen ? renderPhotoReviewSheet(state, escapeHtml) : ""}
+      </div>
+    `;
+  }
+
+  function renderPhotoToolSheet() {
+    return `
+      <div id="photo-tool-overlay" class="absolute inset-0 z-[60] flex items-end justify-center bg-slate-900/45 p-0">
+        <div class="sheet-enter w-full max-w-lg overflow-hidden rounded-t-[32px] bg-white shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.3)] dark:bg-slate-900">
+          <div class="flex h-8 w-full items-center justify-center pt-3">
+            <div class="h-1.5 w-12 rounded-full bg-slate-200 dark:bg-slate-700"></div>
+          </div>
+          <div class="px-8 pb-10 pt-4">
+            <div class="flex flex-col gap-1">
+              <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Add Item</h2>
+              <p class="text-sm text-slate-500 dark:text-slate-400">Choose how you'd like to capture food details</p>
+            </div>
+            <div class="mt-8 grid grid-cols-2 gap-5">
+              <button id="open-barcode-option" class="group flex flex-col items-center justify-center gap-4 rounded-3xl border-2 border-slate-100 bg-slate-50/70 p-8 transition-all hover:border-primary dark:border-slate-800 dark:bg-slate-800/30">
+                <div class="flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-sm transition-colors group-hover:bg-primary/10 dark:bg-slate-800">
+                  <span class="material-symbols-outlined text-4xl text-slate-700 group-hover:text-primary dark:text-slate-200">barcode_scanner</span>
+                </div>
+                <span class="font-bold text-slate-900 dark:text-white">Scan Barcode</span>
+              </button>
+              <button id="open-photo-capture" class="group flex flex-col items-center justify-center gap-4 rounded-3xl border-2 border-slate-100 bg-slate-50/70 p-8 transition-all hover:border-primary dark:border-slate-800 dark:bg-slate-800/30">
+                <div class="flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-sm transition-colors group-hover:bg-primary/10 dark:bg-slate-800">
+                  <span class="material-symbols-outlined text-4xl text-slate-700 group-hover:text-primary dark:text-slate-200">photo_camera</span>
+                </div>
+                <span class="font-bold text-slate-900 dark:text-white">Take Picture</span>
+              </button>
+            </div>
+            <button id="close-photo-tool-sheet" class="mt-8 w-full py-4 text-center text-sm font-semibold text-slate-500 transition-colors hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPhotoCaptureSheet(state, escapeHtml) {
+    const count = state.photoFiles.length;
+    return `
+      <div class="absolute inset-0 z-[70] flex items-end justify-center bg-black">
+        <div class="flex h-full w-full max-w-lg flex-col bg-black text-white">
+          <div class="flex items-center justify-between px-6 py-4">
+            <button id="close-photo-capture" class="flex h-10 w-10 items-center justify-center rounded-full bg-black/20 backdrop-blur-md">
+              <span class="material-symbols-outlined text-white">close</span>
+            </button>
+            <div class="flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-4 py-1.5 backdrop-blur-md">
+              <div class="h-2 w-2 rounded-full bg-primary ${count ? "animate-pulse" : ""}"></div>
+              <span class="text-sm font-semibold tracking-wide">${count} PHOTO${count === 1 ? "" : "S"} TAKEN</span>
+            </div>
+            <button id="photo-add-more-top" class="flex h-10 w-10 items-center justify-center rounded-full bg-black/20 backdrop-blur-md">
+              <span class="material-symbols-outlined text-white">add_a_photo</span>
+            </button>
+          </div>
+
+          <div class="relative mx-auto aspect-[3/4] w-full overflow-hidden bg-slate-950">
+            ${state.photoFiles.length
+              ? `<img alt="Latest capture preview" class="h-full w-full object-cover opacity-90" src="${escapeHtml(state.photoFiles[state.photoFiles.length - 1].url)}" />`
+              : `<div class="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_top,rgba(17,212,50,0.16),transparent_34%),linear-gradient(180deg,#101010_0%,#050505_100%)]">
+                  <div class="flex flex-col items-center gap-3 text-center">
+                    <span class="material-symbols-outlined text-[64px] text-white/80">photo_camera</span>
+                    <p class="max-w-xs text-sm font-medium text-white/70">Take one or more photos of the package front and expiration date.</p>
+                  </div>
+                </div>`}
+            <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div class="relative h-48 w-48 rounded-lg border border-white/30">
+                <div class="absolute -left-1 -top-1 h-4 w-4 border-l-2 border-t-2 border-primary"></div>
+                <div class="absolute -right-1 -top-1 h-4 w-4 border-r-2 border-t-2 border-primary"></div>
+                <div class="absolute -bottom-1 -left-1 h-4 w-4 border-b-2 border-l-2 border-primary"></div>
+                <div class="absolute -bottom-1 -right-1 h-4 w-4 border-b-2 border-r-2 border-primary"></div>
+              </div>
+            </div>
+            <div class="pointer-events-none absolute bottom-6 left-0 right-0 text-center">
+              <p class="text-sm font-medium text-white/80 drop-shadow-md">Align item name and expiration date within the frame</p>
+            </div>
+          </div>
+
+          <div class="flex flex-1 flex-col justify-between bg-black px-6 py-6">
+            <div class="mb-4 min-h-[52px]">
+              ${state.photoRecognitionStatus
+                ? `<div class="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white/80 backdrop-blur-sm">
+                    ${escapeHtml(state.photoRecognitionStatus)}
+                  </div>`
+                : ""}
+            </div>
+            <div class="no-scrollbar flex gap-3 overflow-x-auto pb-2">
+              ${state.photoFiles.length
+                ? state.photoFiles.map((photo) => `
+                    <div class="relative shrink-0">
+                      <img alt="${escapeHtml(photo.name)}" class="h-16 w-16 rounded-lg border-2 ${photo.active ? "border-primary" : "border-white/20"} object-cover" src="${escapeHtml(photo.url)}" />
+                      <button type="button" data-remove-photo-id="${photo.id}" class="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-red-500">
+                        <span class="material-symbols-outlined text-[12px] text-white">close</span>
+                      </button>
+                    </div>
+                  `).join("")
+                : `<div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-white/20 text-white/30">
+                    <span class="material-symbols-outlined text-xl">photo_library</span>
+                  </div>`}
+              <button id="photo-add-more" class="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-lg border-2 border-dashed border-white/20 text-white/40 transition hover:border-primary/60 hover:text-primary">
+                <span class="material-symbols-outlined text-xl">add</span>
+              </button>
+            </div>
+
+            <div class="mt-4 flex items-center justify-between">
+              <button id="photo-open-library" class="flex h-12 w-12 items-center justify-center">
+                <span class="material-symbols-outlined text-3xl text-white">image</span>
+              </button>
+              <button id="photo-shutter" class="flex h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white transition-transform active:scale-95">
+                <span class="h-[58px] w-[58px] rounded-full bg-white"></span>
+              </button>
+              <button id="photo-flip-camera" class="flex h-12 w-12 items-center justify-center rounded-full bg-white/10">
+                <span class="material-symbols-outlined text-white">flip_camera_ios</span>
+              </button>
+            </div>
+
+            <div class="mt-6">
+              <button id="photo-review-trigger" ${(count && !state.photoRecognitionLoading) ? "" : "disabled"} class="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 font-bold text-black shadow-lg shadow-primary/20 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+                <span>${state.photoRecognitionLoading ? "Analyzing Photos..." : "Review AI Scan"}</span>
+                <span class="material-symbols-outlined">arrow_forward</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPhotoReviewSheet(state, escapeHtml) {
+    return `
+      <div class="absolute inset-0 z-[80] flex items-end justify-center bg-background-light text-slate-900 dark:bg-background-dark dark:text-slate-100">
+        <div class="flex h-full min-h-0 w-full max-w-lg flex-col overflow-hidden">
+          <header class="sticky top-0 z-30 border-b border-slate-100 bg-white/85 px-4 py-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/85">
+            <div class="mx-auto flex max-w-lg items-center justify-between">
+              <button id="back-to-photo-capture" class="p-2 -ml-2">
+                <span class="material-symbols-outlined text-slate-500">arrow_back_ios</span>
+              </button>
+              <h1 class="text-lg font-bold">Review AI Scan</h1>
+              <div class="w-10"></div>
+            </div>
+          </header>
+          <main class="min-h-0 flex-1 overflow-y-auto pb-56">
+            <div class="mx-auto max-w-lg px-4 py-6">
+              <div class="mb-6">
+                <p class="text-sm font-medium text-slate-500">${state.photoReviewItems.length} item${state.photoReviewItems.length === 1 ? "" : "s"} recognized from your photos. Tap any field to correct.</p>
+              </div>
+              <div class="space-y-4">
+                ${state.photoReviewItems.map((item) => renderPhotoReviewCard(item, escapeHtml)).join("")}
+              </div>
+            </div>
+          </main>
+          <div class="absolute bottom-0 left-0 right-0 border-t border-slate-100 bg-white/90 p-6 pb-8 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/90">
+            <div class="mx-auto flex max-w-lg flex-col gap-3">
+              <button id="save-photo-review-items" class="w-full rounded-xl bg-primary py-4 font-bold text-slate-900 shadow-lg shadow-primary/20 transition-all active:scale-[0.98]">
+                Save All Items
+              </button>
+              <button id="retake-photo-review" class="w-full rounded-xl bg-slate-100 py-3 text-sm font-semibold text-slate-600 transition-all active:scale-[0.98] dark:bg-slate-800 dark:text-slate-300">
+                Retake Photos
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPhotoReviewCard(item, escapeHtml) {
+    const missingName = item.missingFields.includes("name");
+    const missingExpiry = item.missingFields.includes("expiryDate");
+
+    return `
+      <div class="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div class="flex gap-4">
+          <div class="flex h-20 w-20 items-center justify-center overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800">
+            ${item.previewUrl
+              ? `<img alt="${escapeHtml(item.name || "Captured item")}" class="h-full w-full object-cover" src="${escapeHtml(item.previewUrl)}" />`
+              : `<span class="material-symbols-outlined text-3xl text-slate-400">${escapeHtml(item.icon || "restaurant")}</span>`}
+          </div>
+          <div class="flex-1 space-y-3">
+            <div>
+              <label class="mb-1 block text-[10px] font-bold uppercase tracking-wider ${missingName ? "text-red-500" : "text-slate-400"}">Item Name</label>
+              <div class="${missingName ? "rounded-lg border-2 border-red-300 bg-red-50 px-2 py-1.5 dark:border-red-800 dark:bg-red-950/20" : ""}">
+                <input data-review-item-id="${item.id}" data-review-field="name" class="w-full border-none bg-transparent p-0 text-base font-semibold text-slate-900 focus:ring-0 dark:text-white" type="text" value="${escapeHtml(item.name || "")}" placeholder="${missingName ? "Set item name manually" : ""}" />
+              </div>
+              ${missingName ? `<p class="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-red-500"><span class="material-symbols-outlined text-xs">info</span>Cannot see the item name</p>` : ""}
+            </div>
+            <div>
+              <label class="mb-1 block text-[10px] font-bold uppercase tracking-wider ${missingExpiry ? "text-red-500" : "text-slate-400"}">Expiration Date</label>
+              <div class="flex items-center gap-2 ${missingExpiry ? "rounded-lg border-2 border-red-300 bg-red-50 px-2 py-1.5 dark:border-red-800 dark:bg-red-950/20" : ""}">
+                <span class="material-symbols-outlined text-sm ${missingExpiry ? "text-red-500" : "text-slate-400"}">${missingExpiry ? "event_busy" : "calendar_today"}</span>
+                <input data-review-item-id="${item.id}" data-review-field="expiryDate" class="w-full border-none bg-transparent p-0 text-sm text-slate-600 focus:ring-0 dark:text-slate-300 ${missingExpiry ? "placeholder:text-red-300 dark:placeholder:text-red-500/70" : ""}" type="date" value="${escapeHtml(item.expiryDate || "")}" placeholder="${missingExpiry ? "Set date manually" : ""}" />
+              </div>
+              ${missingExpiry ? `<p class="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-red-500"><span class="material-symbols-outlined text-xs">info</span>Cannot see the expiration date</p>` : ""}
+            </div>
           </div>
         </div>
       </div>
@@ -433,7 +634,10 @@
 
   function highlightEntryMethod(state) {
     document.querySelectorAll(".entry-method-btn").forEach((button) => {
-      const active = button.dataset.entryMethod === state.entryMethod;
+      const active =
+        button.dataset.entryMethod === "manual"
+          ? state.entryMethod === "manual"
+          : state.entryMethod === "scan" || state.photoToolSheetOpen || state.photoCaptureOpen || state.photoReviewOpen;
       button.className =
         "entry-method-btn flex min-h-[168px] flex-col items-center justify-center gap-5 rounded-[24px] border-2 p-5 transition-all " +
         (active

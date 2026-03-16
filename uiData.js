@@ -174,8 +174,37 @@ function lookupBarcode(code) {
   return request(`/api/barcode/${encodeURIComponent(code)}`);
 }
 
+function searchProductByName(query) {
+  return request(`/api/product-search?q=${encodeURIComponent(query)}`);
+}
+
 function fetchSettings() {
   return request("/api/settings");
+}
+
+function fetchAuthSession() {
+  return request("/api/auth/session");
+}
+
+function registerWithEmail(email) {
+  return request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email })
+  });
+}
+
+function loginWithEmail(email) {
+  return request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email })
+  });
+}
+
+function logoutSession() {
+  return request("/api/auth/logout", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
 }
 
 function updateSettingsOnServer(settings) {
@@ -237,11 +266,16 @@ window.FreshTrackerData = {
   getExpiryMeta,
   fetchFoodItems,
   lookupBarcode,
+  searchProductByName,
   createFoodItem,
   createFoodItemOnServer,
   updateFoodItemOnServer,
   deleteFoodItemOnServer,
   fetchSettings,
+  fetchAuthSession,
+  registerWithEmail,
+  loginWithEmail,
+  logoutSession,
   updateSettingsOnServer,
   resetSettingsOnServer,
   fetchAddSettings,

@@ -41,8 +41,15 @@
       };
     </script>
     <style>
+      html,
+      body,
+      #app {
+        height: 100%;
+      }
+
       body {
-        min-height: max(884px, 100dvh);
+        min-height: 100dvh;
+        overflow: hidden;
         font-family: "Plus Jakarta Sans", sans-serif;
         background:
           radial-gradient(circle at top, rgba(17, 212, 50, 0.12), transparent 35%),
@@ -130,6 +137,7 @@
     <script src="./uiData.js"></script>
     <script src="./setting.js"></script>
     <script src="./add.js"></script>
+    <script src="./addPic.js"></script>
     <script src="./scan.js"></script>
     <script src="./trash.js"></script>
     <script src="./calendar.js"></script>

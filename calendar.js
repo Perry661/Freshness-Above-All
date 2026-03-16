@@ -1,7 +1,7 @@
 (function initFreshTrackerCalendar(global) {
   function renderCalendarPage(model, escapeHtml) {
     return `
-      <div class="flex min-h-screen flex-col">
+      <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
         <header class="sticky top-0 z-10 border-b border-primary/10 bg-white/95 px-4 py-4 backdrop-blur-md dark:bg-background-dark/95">
           <div class="flex items-center justify-between gap-3">
             <button id="calendar-back-to-dashboard" class="group flex items-center gap-3 text-left">
@@ -12,13 +12,18 @@
             </button>
           </div>
         </header>
-        <main class="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 p-4 pb-28">
+        <main class="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col gap-6 overflow-y-auto p-4 pb-28">
           <div class="rounded-xl border border-primary/5 bg-white p-4 shadow-sm dark:bg-slate-800/50">
             <div class="mb-4 flex items-center justify-between">
               <button id="calendar-previous-month" class="rounded-full p-2 text-slate-600 hover:bg-primary/10 dark:text-slate-400">
                 <span class="material-symbols-outlined">chevron_left</span>
               </button>
-              <p class="text-base font-bold leading-tight text-slate-900 dark:text-slate-100">${escapeHtml(model.monthLabel)}</p>
+              <div class="flex flex-col items-center gap-2">
+                <p class="text-base font-bold leading-tight text-slate-900 dark:text-slate-100">${escapeHtml(model.monthLabel)}</p>
+                <button id="calendar-go-today" class="rounded-full border border-primary/15 bg-primary/5 px-3 py-1 text-xs font-semibold text-primary transition hover:bg-primary/10">
+                  Today
+                </button>
+              </div>
               <button id="calendar-next-month" class="rounded-full p-2 text-slate-600 hover:bg-primary/10 dark:text-slate-400">
                 <span class="material-symbols-outlined">chevron_right</span>
               </button>

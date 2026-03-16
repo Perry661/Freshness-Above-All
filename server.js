@@ -9,6 +9,7 @@ const FOOD_PATH = path.join(ROOT, "food.json");
 const SETTINGS_PATH = path.join(ROOT, "setting.json");
 const ADD_SETTINGS_PATH = path.join(ROOT, "addSetting.json");
 const TRASH_PATH = path.join(ROOT, "trash.json");
+const ACCOUNT_PATH = path.join(ROOT, "account.json");
 const DEFAULT_SETTINGS = {
   trashAutoDeleteDays: 7,
   reminderStrategy: "standard",
@@ -152,6 +153,64 @@ async function readBody(req) {
   });
 }
 
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getDisplayNameFromEmail(email) {
+  const localPart = normalizeEmail(email).split("@")[0] || "User";
+  return localPart
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "User";
+}
+
+async function readAccountStore() {
+  try {
+    const raw = await fs.readFile(ACCOUNT_PATH, "utf8");
+    if (!raw.trim()) {
+      return { users: [], currentEmail: "" };
+    }
+
+    const parsed = JSON.parse(raw);
+    return {
+      users: Array.isArray(parsed.users) ? parsed.users : [],
+      currentEmail: normalizeEmail(parsed.currentEmail || "")
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return { users: [], currentEmail: "" };
+    }
+    throw error;
+  }
+}
+
+async function writeAccountStore(store) {
+  const payload = {
+    users: Array.isArray(store.users) ? store.users : [],
+    currentEmail: normalizeEmail(store.currentEmail || "")
+  };
+  await fs.writeFile(ACCOUNT_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return payload;
+}
+
+async function getAuthSession() {
+  const store = await readAccountStore();
+  const currentEmail = normalizeEmail(store.currentEmail);
+  const user = store.users.find((entry) => normalizeEmail(entry.email) === currentEmail);
+  if (!user) {
+    return { authenticated: false, user: null };
+  }
+  return {
+    authenticated: true,
+    user: {
+      email: normalizeEmail(user.email),
+      name: String(user.name || getDisplayNameFromEmail(user.email)).trim()
+    }
+  };
+}
+
 function validateFood(item) {
   const required = ["id", "name", "category", "size", "icon", "expiryDate", "createdAt"];
   for (const key of required) {
@@ -220,6 +279,14 @@ function validateSettings(settings) {
     theme,
     soundVolume: Math.round(soundVolume)
   };
+}
+
+function validateAuthPayload(body) {
+  const email = normalizeEmail(body?.email);
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("A valid email is required");
+  }
+  return email;
 }
 
 function validateAddSettings(settings) {
@@ -311,6 +378,21 @@ function mapOpenFoodFactsProduct(code, payload) {
   };
 }
 
+function mapOpenFoodFactsSearchResults(query, payload) {
+  const products = Array.isArray(payload?.products) ? payload.products : [];
+  return {
+    query,
+    results: products.slice(0, 5).map((product) => ({
+      code: String(product.code || "").trim(),
+      name: String(product.product_name || product.product_name_en || "").trim(),
+      brand: String(product.brands || "").trim(),
+      category: String(product.categories || "").trim(),
+      imageUrl: String(product.image_front_small_url || product.image_front_url || "").trim(),
+      source: "open_food_facts_search"
+    })).filter((product) => product.name)
+  };
+}
+
 function mapCategory(primaryTag, fallbackLabel) {
   const text = `${primaryTag || ""} ${fallbackLabel || ""}`.toLowerCase();
 
@@ -390,6 +472,77 @@ async function handleApi(req, res, pathname) {
 
     const payload = await fetchJson(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`);
     return sendJson(res, 200, mapOpenFoodFactsProduct(code, payload));
+  }
+
+  if (pathname === "/api/product-search" && req.method === "GET") {
+    const query = String(url.searchParams.get("q") || "").trim();
+    if (!query) {
+      return sendJson(res, 400, { error: "Search query is required" });
+    }
+
+    const payload = await fetchJson(
+      `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=5`
+    );
+    return sendJson(res, 200, mapOpenFoodFactsSearchResults(query, payload));
+  }
+
+  if (pathname === "/api/auth/session" && req.method === "GET") {
+    return sendJson(res, 200, await getAuthSession());
+  }
+
+  if (pathname === "/api/auth/register" && req.method === "POST") {
+    const body = await readBody(req);
+    const email = validateAuthPayload(body);
+    const store = await readAccountStore();
+    const exists = store.users.find((entry) => normalizeEmail(entry.email) === email);
+    if (exists) {
+      store.currentEmail = email;
+      await writeAccountStore(store);
+      return sendJson(res, 200, {
+        authenticated: true,
+        user: {
+          email,
+          name: String(exists.name || getDisplayNameFromEmail(email)).trim()
+        }
+      });
+    }
+
+    const user = {
+      email,
+      name: getDisplayNameFromEmail(email),
+      createdAt: new Date().toISOString()
+    };
+    store.users = [...store.users, user];
+    store.currentEmail = email;
+    await writeAccountStore(store);
+    return sendJson(res, 201, { authenticated: true, user: { email, name: user.name } });
+  }
+
+  if (pathname === "/api/auth/login" && req.method === "POST") {
+    const body = await readBody(req);
+    const email = validateAuthPayload(body);
+    const store = await readAccountStore();
+    const user = store.users.find((entry) => normalizeEmail(entry.email) === email);
+    if (!user) {
+      return sendJson(res, 404, { error: "No account found for that email. Sign up first." });
+    }
+
+    store.currentEmail = email;
+    await writeAccountStore(store);
+    return sendJson(res, 200, {
+      authenticated: true,
+      user: {
+        email,
+        name: String(user.name || getDisplayNameFromEmail(email)).trim()
+      }
+    });
+  }
+
+  if (pathname === "/api/auth/logout" && req.method === "POST") {
+    const store = await readAccountStore();
+    store.currentEmail = "";
+    await writeAccountStore(store);
+    return sendJson(res, 200, { authenticated: false, user: null });
   }
 
   if (pathname.startsWith("/api/foods/")) {

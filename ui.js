@@ -6,12 +6,21 @@ if (!window.FreshTrackerAdd || !window.FreshTrackerSettings || !window.FreshTrac
   throw new Error("Required UI modules did not load. Check add.js, scan.js, setting.js, trash.js, calendar.js, and sound.js.");
 }
 
+if (!window.FreshTrackerAddPic) {
+  throw new Error("addPic.js did not load. Check packaged photo recognition helpers.");
+}
+
 const {
   DAY_MS: MS_PER_DAY,
   formatDisplayDate: formatFoodDisplayDate,
   getExpiryMeta: getFoodExpiryMeta,
   fetchFoodItems: fetchFoodItemsFromApi,
   lookupBarcode: lookupBarcodeFromApi,
+  searchProductByName: searchProductByNameFromApi,
+  fetchAuthSession: fetchAuthSessionFromApi,
+  registerWithEmail: registerWithEmailFromApi,
+  loginWithEmail: loginWithEmailFromApi,
+  logoutSession: logoutSessionFromApi,
   createFoodItem: buildFoodItem,
   createFoodItemOnServer: createFoodItemInApi,
   updateFoodItemOnServer: updateFoodItemInApi,
@@ -35,6 +44,13 @@ const {
   hydrateFormDefaults: hydrateAddFormDefaults,
   highlightEntryMethod
 } = window.FreshTrackerAdd;
+
+const {
+  normalizeOcrText,
+  extractPackagedFoodName,
+  extractPackagedFoodKeywordQuery,
+  isLowQualityNameCandidate
+} = window.FreshTrackerAddPic;
 
 const {
   reminderStrategies,
@@ -76,6 +92,11 @@ const {
   isSupported: isBarcodeScannerSupported
 } = window.FreshTrackerScan || {};
 
+const TESSERACT_CDN_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+let tesseractScriptPromise = null;
+let tesseractWorkerPromise = null;
+
+
 const state = {
   items: [],
   trashItems: [],
@@ -109,6 +130,13 @@ const state = {
   quickDays: 0,
   expiryPickerMode: "wheel",
   entryMethod: "manual",
+  photoToolSheetOpen: false,
+  photoCaptureOpen: false,
+  photoReviewOpen: false,
+  photoRecognitionLoading: false,
+  photoRecognitionStatus: "",
+  photoFiles: [],
+  photoReviewItems: [],
   modalMode: "create",
   editingId: null,
   addFoodScrollTop: 0,
@@ -117,6 +145,11 @@ const state = {
   scanManualCode: "",
   draft: createDraft({}, computeQuickExpiryDate),
   settings: getDefaultSettings(),
+  account: { authenticated: false, user: null },
+  showAuthSheet: false,
+  authMode: "login",
+  authEmail: "",
+  authError: "",
   reminderDraft: null,
   cleanupDraft: null
 };
@@ -132,6 +165,12 @@ async function initApp() {
     hydrateAllFoodViewSettings(await fetchAddSettingsFromApi());
   } catch (error) {
     console.warn("Failed to load settings from addSetting.json:", error);
+  }
+
+  try {
+    state.account = await fetchAuthSessionFromApi();
+  } catch (error) {
+    console.warn("Failed to load auth session:", error);
   }
 
   applyTheme(state.settings);
@@ -183,7 +222,7 @@ function renderApp() {
   const trashDetailSheet = state.view === "trash" ? renderTrashDetailSheet(getTrashDetailItem(), escapeHtml) : "";
 
   root.innerHTML = `
-    <div class="mx-auto flex min-h-screen w-full max-w-md flex-col bg-background-light dark:bg-background-dark">
+    <div class="mx-auto flex h-[100dvh] min-h-0 w-full max-w-md flex-col overflow-hidden bg-background-light dark:bg-background-dark">
       ${renderCurrentView(model)}
       ${state.view === "notification-settings" || state.view === "cleanup" ? "" : renderBottomNav()}
       ${notificationModal}
@@ -518,6 +557,14 @@ async function handleClick(event) {
     return;
   }
 
+  if (event.target.closest("#calendar-go-today")) {
+    const today = new Date();
+    state.calendarMonth = getMonthKey(today);
+    state.calendarSelectedDate = getDateKey(today);
+    renderApp();
+    return;
+  }
+
   const calendarDateButton = event.target.closest("[data-calendar-date]");
   if (calendarDateButton) {
     state.calendarSelectedDate = calendarDateButton.dataset.calendarDate;
@@ -536,6 +583,34 @@ async function handleClick(event) {
     state.reminderDraft = state.settings.reminderStrategy;
     clearSelectionMode();
     setView("settings");
+    return;
+  }
+
+  if (event.target.closest("#open-auth-sheet")) {
+    state.showAuthSheet = true;
+    state.authError = "";
+    state.authEmail = state.account?.user?.email || "";
+    renderApp();
+    return;
+  }
+
+  if (event.target.closest("#close-auth-sheet") || event.target.id === "auth-sheet-overlay") {
+    state.showAuthSheet = false;
+    state.authError = "";
+    renderApp();
+    return;
+  }
+
+  const authModeButton = event.target.closest("[data-auth-mode]");
+  if (authModeButton) {
+    state.authMode = authModeButton.dataset.authMode;
+    state.authError = "";
+    renderApp();
+    return;
+  }
+
+  if (event.target.closest("#log-out")) {
+    void handleLogout();
     return;
   }
 
@@ -960,7 +1035,17 @@ async function handleClick(event) {
 
   const methodButton = event.target.closest(".entry-method-btn");
   if (methodButton) {
+    if (methodButton.dataset.entryMethod === "photo") {
+      state.photoToolSheetOpen = true;
+      renderApp();
+      openModal();
+      return;
+    }
+
     state.entryMethod = methodButton.dataset.entryMethod;
+    state.photoToolSheetOpen = false;
+    state.photoCaptureOpen = false;
+    state.photoReviewOpen = false;
     if (state.entryMethod !== "scan") {
       stopBarcodeScanner?.();
       state.scanStatus = "";
@@ -968,6 +1053,84 @@ async function handleClick(event) {
     }
     renderApp();
     openModal();
+    return;
+  }
+
+  if (event.target.closest("#close-photo-tool-sheet") || event.target.id === "photo-tool-overlay") {
+    state.photoToolSheetOpen = false;
+    renderApp();
+    openModal();
+    return;
+  }
+
+  if (event.target.closest("#open-barcode-option")) {
+    state.entryMethod = "scan";
+    state.photoToolSheetOpen = false;
+    renderApp();
+    openModal();
+    return;
+  }
+
+  if (
+    event.target.closest("#open-photo-capture") ||
+    event.target.closest("#photo-shutter") ||
+    event.target.closest("#photo-add-more") ||
+    event.target.closest("#photo-add-more-top") ||
+    event.target.closest("#photo-open-library")
+  ) {
+    state.entryMethod = "manual";
+    state.photoToolSheetOpen = false;
+    state.photoCaptureOpen = true;
+    state.photoReviewOpen = false;
+    renderApp();
+    openModal();
+    document.getElementById("photo-file-input")?.click();
+    return;
+  }
+
+  if (event.target.closest("#close-photo-capture")) {
+    state.photoCaptureOpen = false;
+    renderApp();
+    openModal();
+    return;
+  }
+
+  const removePhotoButton = event.target.closest("[data-remove-photo-id]");
+  if (removePhotoButton) {
+    removeCapturedPhoto(removePhotoButton.dataset.removePhotoId);
+    renderApp();
+    openModal();
+    return;
+  }
+
+  if (event.target.closest("#photo-review-trigger")) {
+    if (!state.photoFiles.length) {
+      return;
+    }
+    void runPhotoRecognitionFlow();
+    return;
+  }
+
+  if (event.target.closest("#back-to-photo-capture")) {
+    state.photoReviewOpen = false;
+    state.photoCaptureOpen = true;
+    renderApp();
+    openModal();
+    return;
+  }
+
+  if (event.target.closest("#retake-photo-review")) {
+    state.photoReviewOpen = false;
+    state.photoCaptureOpen = true;
+    state.photoReviewItems = [];
+    renderApp();
+    openModal();
+    document.getElementById("photo-file-input")?.click();
+    return;
+  }
+
+  if (event.target.closest("#save-photo-review-items")) {
+    void savePhotoReviewItems();
     return;
   }
 
@@ -1039,6 +1202,22 @@ async function handleChange(event) {
     state.draft.expiryDate = event.target.value;
   }
 
+  if (event.target.id === "photo-file-input") {
+    appendCapturedPhotos(event.target.files);
+    event.target.value = "";
+    return;
+  }
+
+  if (event.target.name === "authEmail") {
+    state.authEmail = event.target.value;
+  }
+
+  if (event.target.dataset.reviewItemId && event.target.dataset.reviewField) {
+    updatePhotoReviewField(event.target.dataset.reviewItemId, event.target.dataset.reviewField, event.target.value);
+    renderApp();
+    openModal();
+  }
+
   if (event.target.name === "cleanup_reason") {
     state.cleanupDraft.reason = event.target.value;
   }
@@ -1076,9 +1255,19 @@ function handleInput(event) {
       valueLabel.textContent = String(nextVolume);
     }
   }
+
+  if (event.target.dataset.reviewItemId && event.target.dataset.reviewField) {
+    updatePhotoReviewField(event.target.dataset.reviewItemId, event.target.dataset.reviewField, event.target.value);
+  }
 }
 
 async function handleSubmit(event) {
+  if (event.target.id === "auth-form") {
+    event.preventDefault();
+    await handleAuthSubmit();
+    return;
+  }
+
   if (event.target.id !== "add-food-form") {
     return;
   }
@@ -1220,6 +1409,13 @@ function openCreateModal() {
   state.quickDays = 0;
   state.expiryPickerMode = "wheel";
   state.entryMethod = "manual";
+  state.photoToolSheetOpen = false;
+  state.photoCaptureOpen = false;
+  state.photoReviewOpen = false;
+  state.photoRecognitionLoading = false;
+  state.photoRecognitionStatus = "";
+  state.photoFiles = [];
+  state.photoReviewItems = [];
   state.addFoodScrollTop = 0;
   state.scanStatus = "";
   state.scanFeedback = null;
@@ -1243,6 +1439,13 @@ function openEditModal(id) {
   state.quickDays = getExistingQuickDays(item.expiryDate);
   state.expiryPickerMode = "wheel";
   state.entryMethod = "manual";
+  state.photoToolSheetOpen = false;
+  state.photoCaptureOpen = false;
+  state.photoReviewOpen = false;
+  state.photoRecognitionLoading = false;
+  state.photoRecognitionStatus = "";
+  state.photoFiles = [];
+  state.photoReviewItems = [];
   state.addFoodScrollTop = 0;
   state.scanStatus = "";
   state.scanFeedback = null;
@@ -1253,12 +1456,20 @@ function openEditModal(id) {
 }
 
 function resetModalState() {
+  revokeCapturedPhotoUrls();
   state.saving = false;
   state.modalMode = "create";
   state.editingId = null;
   state.quickDays = 0;
   state.expiryPickerMode = "wheel";
   state.entryMethod = "manual";
+  state.photoToolSheetOpen = false;
+  state.photoCaptureOpen = false;
+  state.photoReviewOpen = false;
+  state.photoRecognitionLoading = false;
+  state.photoRecognitionStatus = "";
+  state.photoFiles = [];
+  state.photoReviewItems = [];
   state.addFoodScrollTop = 0;
   state.scanStatus = "";
   state.scanFeedback = null;
@@ -1532,6 +1743,569 @@ function inferIconFromCategory(category) {
   return "restaurant";
 }
 
+function appendCapturedPhotos(fileList) {
+  const files = Array.from(fileList || []).filter((file) => file && String(file.type || "").startsWith("image/"));
+  if (!files.length) {
+    return;
+  }
+
+  const nextPhotos = files.map((file, index) => ({
+    id: `photo-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    name: file.name || `Photo ${index + 1}`,
+    url: URL.createObjectURL(file),
+    file,
+    active: false
+  }));
+
+  state.photoFiles = [...state.photoFiles.map((photo) => ({ ...photo, active: false })), ...nextPhotos];
+  state.photoRecognitionStatus = `${state.photoFiles.length} photo${state.photoFiles.length === 1 ? "" : "s"} ready. Add more photos or start AI review.`;
+  if (state.photoFiles.length) {
+    state.photoFiles[state.photoFiles.length - 1].active = true;
+  }
+  renderApp();
+  openModal();
+}
+
+function removeCapturedPhoto(photoId) {
+  const removed = state.photoFiles.find((photo) => photo.id === photoId);
+  if (removed?.url) {
+    URL.revokeObjectURL(removed.url);
+  }
+
+  state.photoFiles = state.photoFiles
+    .filter((photo) => photo.id !== photoId)
+    .map((photo, index, list) => ({ ...photo, active: index === list.length - 1 }));
+
+  if (!state.photoFiles.length) {
+    state.photoCaptureOpen = false;
+    state.photoReviewOpen = false;
+    state.photoReviewItems = [];
+    state.photoToolSheetOpen = true;
+    state.photoRecognitionStatus = "";
+  }
+}
+
+function revokeCapturedPhotoUrls() {
+  state.photoFiles.forEach((photo) => {
+    if (photo?.url) {
+      URL.revokeObjectURL(photo.url);
+    }
+  });
+}
+
+function buildPhotoReviewItems() {
+  return state.photoFiles.map((photo, index) => {
+    const recognition = recognizePhotoDraft(photo, "", index);
+    return {
+      id: `review-${photo.id}`,
+      photoId: photo.id,
+      previewUrl: photo.url,
+      icon: recognition.icon,
+      name: recognition.name,
+      expiryDate: recognition.expiryDate,
+      missingFields: recognition.missingFields
+    };
+  });
+}
+
+function recognizePhotoDraft(photo, recognizedText, index) {
+  const fileName = String(photo.name || "");
+  const stem = fileName.replace(/\.[^.]+$/, "");
+  const expiryDate = extractExpiryDateFromText(recognizedText) || extractDateFromPhotoName(stem);
+  const name = extractNameFromText(recognizedText) || extractNameFromPhotoName(stem);
+  const normalizedName = String(name || "").trim();
+
+  return {
+    name: normalizedName,
+    expiryDate,
+    icon: inferIconFromName(normalizedName),
+    missingFields: [
+      ...(normalizedName ? [] : ["name"]),
+      ...(expiryDate ? [] : ["expiryDate"])
+    ]
+  };
+}
+
+function extractDateFromPhotoName(value) {
+  const text = String(value || "");
+  const iso = text.match(/(20\d{2})[-_]?([01]\d)[-_]?([0-3]\d)/);
+  if (iso) {
+    return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  }
+
+  const us = text.match(/([01]?\d)[-_]([0-3]?\d)[-_](20\d{2})/);
+  if (us) {
+    const month = String(us[1]).padStart(2, "0");
+    const day = String(us[2]).padStart(2, "0");
+    return `${us[3]}-${month}-${day}`;
+  }
+
+  return "";
+}
+
+function extractExpiryDateFromText(value) {
+  const text = String(value || "");
+  const upper = text.toUpperCase();
+
+  const monthMap = {
+    JAN: "01",
+    FEB: "02",
+    MAR: "03",
+    APR: "04",
+    MAY: "05",
+    JUN: "06",
+    JUL: "07",
+    AUG: "08",
+    SEP: "09",
+    OCT: "10",
+    NOV: "11",
+    DEC: "12"
+  };
+
+  const labeledIso = upper.match(/(?:EXP|EXPIRES|EXPIRATION|BEST BY|USE BY|SELL BY)[^\dA-Z]{0,8}(20\d{2})[\/\-. ]([01]?\d)[\/\-. ]([0-3]?\d)/);
+  if (labeledIso) {
+    return `${labeledIso[1]}-${String(labeledIso[2]).padStart(2, "0")}-${String(labeledIso[3]).padStart(2, "0")}`;
+  }
+
+  const labeledUs = upper.match(/(?:EXP|EXPIRES|EXPIRATION|BEST BY|USE BY|SELL BY)[^\dA-Z]{0,8}([01]?\d)[\/\-. ]([0-3]?\d)[\/\-. ](20\d{2})/);
+  if (labeledUs) {
+    return `${labeledUs[3]}-${String(labeledUs[1]).padStart(2, "0")}-${String(labeledUs[2]).padStart(2, "0")}`;
+  }
+
+  const labeledTextual = upper.match(/(?:EXP|EXPIRES|EXPIRATION|BEST BY|USE BY|SELL BY)[^A-Z0-9]{0,8}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\s+([0-3]?\d)[, ]+\s*(20\d{2})/);
+  if (labeledTextual) {
+    return `${labeledTextual[3]}-${monthMap[labeledTextual[1]]}-${String(labeledTextual[2]).padStart(2, "0")}`;
+  }
+
+  const plainIso = upper.match(/\b(20\d{2})[\/\-. ]([01]?\d)[\/\-. ]([0-3]?\d)\b/);
+  if (plainIso) {
+    return `${plainIso[1]}-${String(plainIso[2]).padStart(2, "0")}-${String(plainIso[3]).padStart(2, "0")}`;
+  }
+
+  const plainUs = upper.match(/\b([01]?\d)[\/\-. ]([0-3]?\d)[\/\-. ](20\d{2})\b/);
+  if (plainUs) {
+    return `${plainUs[3]}-${String(plainUs[1]).padStart(2, "0")}-${String(plainUs[2]).padStart(2, "0")}`;
+  }
+
+  return "";
+}
+
+function extractNameFromPhotoName(value) {
+  const text = String(value || "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/(20\d{2})[-_]?([01]\d)[-_]?([0-3]\d)/g, " ")
+    .replace(/([01]?\d)[-_]([0-3]?\d)[-_](20\d{2})/g, " ")
+    .replace(/\b(img|image|photo|scan|capture|dsc|pxl|mvimg)\b/gi, " ")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text || /^[\d\s]+$/.test(text)) {
+    return "";
+  }
+
+  return text
+    .split(" ")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function extractNameFromText(value) {
+  const rawText = String(value || "");
+  const normalizedText = normalizeOcrText(rawText);
+  const packagedName = extractPackagedFoodName(normalizedText);
+  if (packagedName) {
+    return packagedName;
+  }
+
+  const lines = normalizedText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const blocked = [
+    "nutrition facts",
+    "ingredients",
+    "barcode",
+    "best by",
+    "use by",
+    "sell by",
+    "exp",
+    "expires",
+    "distributed by",
+    "keep refrigerated",
+    "net wt",
+    "serving size"
+  ];
+
+  const candidates = lines
+    .filter((line) => {
+      const normalized = line.toLowerCase();
+      if (normalized.length < 3 || normalized.length > 48) {
+        return false;
+      }
+      if (/\d{2,}/.test(normalized) && !/[a-z]/i.test(normalized.replace(/\d+/g, ""))) {
+        return false;
+      }
+      if (blocked.some((token) => normalized.includes(token))) {
+        return false;
+      }
+      if (/^[^a-z]*$/i.test(normalized)) {
+        return false;
+      }
+      return /[a-z]/i.test(normalized);
+    })
+    .sort((a, b) => scoreNameCandidate(b) - scoreNameCandidate(a));
+
+  return candidates[0] || "";
+}
+
+function scoreNameCandidate(line) {
+  const normalized = String(line || "").trim();
+  const words = normalized.split(/\s+/).filter(Boolean);
+  let score = 0;
+  score += Math.min(18, normalized.length);
+  score += Math.min(10, words.length * 2);
+  if (/^[A-Z][A-Z\s]+$/.test(normalized)) {
+    score += 4;
+  }
+  if (/^[A-Za-z][A-Za-z\s&()%'-]+$/.test(normalized)) {
+    score += 4;
+  }
+  if (/[’']s\b/.test(normalized)) {
+    score += 4;
+  }
+  if (/\b(classic|original|cheese|milk|chips|bread|yogurt|eggs|spinach|water)\b/i.test(normalized)) {
+    score += 5;
+  }
+  if (words.length >= 2 && words.length <= 5) {
+    score += 4;
+  }
+  if (/\b(no|free|artificial|gluten|ingredients|potatoes)\b/i.test(normalized)) {
+    score -= 6;
+  }
+  return score;
+}
+
+function inferIconFromName(name) {
+  const value = String(name || "").toLowerCase();
+  if (!value) {
+    return "restaurant";
+  }
+  if (/(chocolate|candy|hazelnut|snickers|twix|kitkat|ferrero|rocher)/.test(value)) {
+    return "nutrition";
+  }
+  if (/(milk|organic milk|omega-3 milk|dha milk|whole milk|reduced fat milk|low fat milk)/.test(value)) {
+    return "water_drop";
+  }
+  if (/(milk|drink|juice|water|tea|coffee)/.test(value)) {
+    return "water_drop";
+  }
+  if (/(spinach|lettuce|vegetable|salad|broccoli)/.test(value)) {
+    return "eco";
+  }
+  if (/(egg)/.test(value)) {
+    return "egg";
+  }
+  if (/(bread|toast|bagel)/.test(value)) {
+    return "bakery_dining";
+  }
+  if (/(pizza)/.test(value)) {
+    return "local_pizza";
+  }
+  if (/(yogurt|milk|cheese)/.test(value)) {
+    return "nutrition";
+  }
+  return "restaurant";
+}
+
+async function runPhotoRecognitionFlow() {
+  state.photoRecognitionLoading = true;
+  state.photoRecognitionStatus = "Preparing free on-device OCR...";
+  renderApp();
+  openModal();
+
+  try {
+    const worker = await getTesseractWorker();
+    const reviewItems = [];
+
+    for (let index = 0; index < state.photoFiles.length; index += 1) {
+      const photo = state.photoFiles[index];
+      state.photoRecognitionStatus = `Analyzing photo ${index + 1} of ${state.photoFiles.length}...`;
+      renderApp();
+      openModal();
+
+      let recognizedText = "";
+      try {
+        const result = await worker.recognize(photo.file);
+        recognizedText = String(result?.data?.text || "");
+      } catch (error) {
+        console.warn("Photo OCR failed for", photo.name, error);
+      }
+
+      let recognition = recognizePhotoDraft(photo, recognizedText, index);
+      const searchQuery = buildProductSearchQuery(recognition.name, recognizedText);
+      if (searchQuery) {
+        state.photoRecognitionStatus = `Matching product ${index + 1} of ${state.photoFiles.length} with Open Food Facts...`;
+        renderApp();
+        openModal();
+        try {
+          const searchResult = await searchProductByNameFromApi(searchQuery);
+          const matchedProduct = pickBestOpenFoodFactsMatch(searchQuery, recognition.name, searchResult?.results || []);
+          if (matchedProduct) {
+            recognition = {
+              ...recognition,
+              name: matchedProduct.name,
+              icon: inferIconFromName(matchedProduct.name),
+              missingFields: recognition.missingFields.filter((field) => field !== "name")
+            };
+          }
+        } catch (error) {
+          console.warn("Open Food Facts search fallback failed:", error);
+        }
+      }
+
+      reviewItems.push({
+        id: `review-${photo.id}`,
+        photoId: photo.id,
+        previewUrl: photo.url,
+        icon: recognition.icon,
+        name: recognition.name,
+        expiryDate: recognition.expiryDate,
+        missingFields: recognition.missingFields
+      });
+    }
+
+    state.photoReviewItems = reviewItems;
+    state.photoCaptureOpen = false;
+    state.photoReviewOpen = true;
+    state.photoRecognitionStatus = "";
+  } catch (error) {
+    console.warn("Falling back to heuristic photo parsing:", error);
+    state.photoReviewItems = buildPhotoReviewItems();
+    state.photoCaptureOpen = false;
+    state.photoReviewOpen = true;
+    state.photoRecognitionStatus = "";
+  } finally {
+    state.photoRecognitionLoading = false;
+    renderApp();
+    openModal();
+  }
+}
+
+function loadTesseractScript() {
+  if (globalThis.Tesseract) {
+    return Promise.resolve(globalThis.Tesseract);
+  }
+
+  if (!tesseractScriptPromise) {
+    tesseractScriptPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-tesseract-loader="true"]');
+      if (existing) {
+        existing.addEventListener("load", () => resolve(globalThis.Tesseract), { once: true });
+        existing.addEventListener("error", () => reject(new Error("Failed to load Tesseract.js.")), { once: true });
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = TESSERACT_CDN_URL;
+      script.async = true;
+      script.dataset.tesseractLoader = "true";
+      script.onload = () => resolve(globalThis.Tesseract);
+      script.onerror = () => reject(new Error("Failed to load Tesseract.js."));
+      document.head.appendChild(script);
+    });
+  }
+
+  return tesseractScriptPromise;
+}
+
+async function getTesseractWorker() {
+  if (!tesseractWorkerPromise) {
+    tesseractWorkerPromise = (async () => {
+      const Tesseract = await loadTesseractScript();
+      if (!Tesseract?.createWorker) {
+        throw new Error("Tesseract.js is not available.");
+      }
+
+      const worker = await Tesseract.createWorker("eng");
+      return worker;
+    })();
+  }
+
+  return tesseractWorkerPromise;
+}
+
+function buildProductSearchQuery(nameCandidate, recognizedText) {
+  const normalizedText = normalizeOcrText(recognizedText);
+  const packagedName = extractPackagedFoodName(normalizedText);
+  if (packagedName) {
+    return packagedName;
+  }
+
+  const packagedKeywords = extractPackagedFoodKeywordQuery(normalizedText);
+  if (packagedKeywords) {
+    return packagedKeywords;
+  }
+
+  const preferred = String(nameCandidate || "").trim();
+  if (preferred && !isLowQualityNameCandidate(preferred)) {
+    return preferred;
+  }
+
+  const lines = normalizedText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => /[a-z]/i.test(line))
+    .slice(0, 3);
+
+  return lines.join(" ").slice(0, 60).trim();
+}
+
+function pickBestOpenFoodFactsMatch(query, recognizedName, results) {
+  const baseline = String(recognizedName || query || "").trim();
+  const scored = results
+    .map((result) => ({
+      ...result,
+      score: scoreProductMatch(baseline, result.name, result.brand)
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  if (!scored.length || scored[0].score < 0.34) {
+    return null;
+  }
+
+  return scored[0];
+}
+
+function scoreProductMatch(inputName, candidateName, brand) {
+  const inputTokens = tokenizeProductName(inputName);
+  const candidateTokens = tokenizeProductName(candidateName);
+  const brandTokens = tokenizeProductName(brand);
+
+  if (!inputTokens.length || !candidateTokens.length) {
+    return 0;
+  }
+
+  const intersection = inputTokens.filter((token) => candidateTokens.includes(token)).length;
+  const union = new Set([...inputTokens, ...candidateTokens]).size || 1;
+  const jaccard = intersection / union;
+  const prefixBonus = candidateName.toLowerCase().startsWith(String(inputName || "").trim().toLowerCase()) ? 0.18 : 0;
+  const brandBonus = inputTokens.some((token) => brandTokens.includes(token)) ? 0.15 : 0;
+
+  return jaccard + prefixBonus + brandBonus;
+}
+
+function tokenizeProductName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/lay'?s/g, "lays")
+    .replace(/dorito'?s/g, "doritos")
+    .replace(/cheeto'?s/g, "cheetos")
+    .replace(/ruffle'?s/g, "ruffles")
+    .replace(/pringle'?s/g, "pringles")
+    .replace(/reese'?s/g, "reeses")
+    .replace(/m&m'?s/g, "mms")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token && token.length > 1 && !["with", "made", "real", "the", "and"].includes(token));
+}
+
+function updatePhotoReviewField(itemId, field, value) {
+  state.photoReviewItems = state.photoReviewItems.map((item) => {
+    if (item.id !== itemId) {
+      return item;
+    }
+
+    const nextValue = field === "name" ? value : value;
+    const missingFields = item.missingFields.filter((entry) => entry !== field);
+    if (!String(nextValue || "").trim()) {
+      missingFields.push(field);
+    }
+
+    return {
+      ...item,
+      [field]: nextValue,
+      missingFields
+    };
+  });
+}
+
+async function savePhotoReviewItems() {
+  const invalid = state.photoReviewItems.find((item) => !String(item.name || "").trim() || !String(item.expiryDate || "").trim());
+  if (invalid) {
+    state.error = "Complete item name and expiration date for every recognized item before saving.";
+    renderApp();
+    openModal();
+    return;
+  }
+
+  state.saving = true;
+  renderApp();
+  openModal();
+
+  try {
+    for (const item of state.photoReviewItems) {
+      const payload = buildFoodItem({
+        name: item.name,
+        category: "other",
+        size: "TEXT",
+        expiryDate: item.expiryDate,
+        icon: item.icon || "restaurant",
+        imageUrl: "",
+        source: "photo_ai_review"
+      });
+      await createFoodItemInApi(payload);
+    }
+
+    playAddSound();
+    resetModalState();
+    closeModal();
+    await refreshItems();
+  } catch (error) {
+    state.error = error.message;
+    state.saving = false;
+    renderApp();
+    openModal();
+  }
+}
+
+async function handleAuthSubmit() {
+  state.authError = "";
+  const email = String(state.authEmail || "").trim().toLowerCase();
+  if (!email) {
+    state.authError = "Enter an email first.";
+    renderApp();
+    return;
+  }
+
+  try {
+    state.account = state.authMode === "register"
+      ? await registerWithEmailFromApi(email)
+      : await loginWithEmailFromApi(email);
+    state.showAuthSheet = false;
+    state.authEmail = state.account?.user?.email || "";
+  } catch (error) {
+    state.authError = error.message;
+  }
+
+  renderApp();
+}
+
+async function handleLogout() {
+  try {
+    state.account = await logoutSessionFromApi();
+  } catch (error) {
+    state.authError = error.message;
+  }
+
+  state.showAuthSheet = false;
+  state.authEmail = "";
+  state.authError = "";
+  renderApp();
+}
+
 function computeQuickExpiryDate(days) {
   const date = new Date(Date.now() + days * MS_PER_DAY);
   const year = date.getFullYear();
@@ -1688,7 +2462,7 @@ function clearSelectionMode() {
 
 function renderAllFoodPage(model) {
   return `
-    <div class="relative flex h-screen w-full flex-col overflow-hidden">
+    <div class="relative flex min-h-0 flex-1 w-full flex-col overflow-hidden">
       <header class="flex flex-col gap-2 border-b border-primary/10 bg-white/95 px-4 pb-3 pt-4 backdrop-blur-md dark:bg-background-dark/95">
         <div class="flex items-center justify-between gap-3">
           <button id="all-food-back-to-dashboard" class="group flex items-center gap-3 text-left transition-opacity hover:opacity-80">
@@ -1722,7 +2496,7 @@ function renderAllFoodPage(model) {
           </div>
         </div>
       </header>
-      <main class="custom-scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      <main class="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-32 pt-4">
         ${state.allFoodSelectionMode ? `
           <div class="mb-4 flex items-center justify-between rounded-xl border border-primary/10 bg-primary/5 p-3">
             <button id="all-food-select-all" class="flex items-center gap-2">
@@ -1796,14 +2570,14 @@ function renderAllFoodCard(item) {
         ` : ''}
       </div>
       <div class="min-w-0 flex-1">
-        <button ${detailTarget} class="truncate text-left font-bold text-slate-800 dark:text-white ${selectionMode ? 'pointer-events-none' : ''}">${escapeHtml(item.name)}</button>
+        <button ${detailTarget} class="block w-full truncate text-left font-bold text-slate-800 dark:text-white ${selectionMode ? 'pointer-events-none' : ''}">${escapeHtml(item.name)}</button>
         <div class="mt-0.5 flex items-center gap-1 text-xs ${badge.metaClass}">
           <span class="material-symbols-outlined text-[14px]">${badge.icon}</span>
           <span>${datePrefix}: ${escapeHtml(formatFoodDisplayDate(item.expiryDate))}</span>
         </div>
       </div>
-      <div class="flex flex-col items-end gap-2">
-        <span class="rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${badge.badgeClass}">${badge.label}</span>
+      <div class="shrink-0 flex flex-col items-end gap-2">
+        <span class="whitespace-nowrap rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${badge.badgeClass}">${badge.label}</span>
         <button ${detailTarget} class="material-symbols-outlined cursor-pointer text-slate-300 transition-colors group-hover:text-primary ${selectionMode ? 'pointer-events-none' : ''}">chevron_right</button>
       </div>
     </div>
