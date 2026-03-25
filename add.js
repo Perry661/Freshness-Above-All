@@ -392,6 +392,8 @@
   function renderPhotoReviewCard(item, escapeHtml) {
     const missingName = item.missingFields.includes("name");
     const missingExpiry = item.missingFields.includes("expiryDate");
+    const ocrCandidates = Array.isArray(item.ocrDebug?.candidateRegions) ? item.ocrDebug.candidateRegions : [];
+    const ocrText = String(item.ocrDebug?.text || "").trim();
 
     return `
       <div class="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -419,6 +421,26 @@
             </div>
           </div>
         </div>
+        ${(ocrCandidates.length || ocrText)
+          ? `<div class="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs text-slate-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-slate-200">
+              <p class="mb-2 font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">OCR Debug</p>
+              ${ocrCandidates.length
+                ? `<div class="space-y-1">
+                    ${ocrCandidates.slice(0, 6).map((candidate, index) => `
+                      <div class="rounded-md bg-white/80 px-2 py-1 dark:bg-slate-900/40">
+                        <span class="font-semibold text-amber-700 dark:text-amber-300">#${index + 1}</span>
+                        <span class="ml-2">${escapeHtml(candidate)}</span>
+                      </div>
+                    `).join("")}
+                  </div>`
+                : ""}
+              ${ocrText
+                ? `<div class="mt-2 rounded-md bg-white/70 px-2 py-2 text-[11px] leading-5 text-slate-600 dark:bg-slate-900/30 dark:text-slate-300">
+                    ${escapeHtml(ocrText.slice(0, 500))}
+                  </div>`
+                : ""}
+            </div>`
+          : ""}
       </div>
     `;
   }

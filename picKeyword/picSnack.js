@@ -6,15 +6,15 @@
     { variants: ["ruffles", "ruffle"], label: "Ruffles" },
     { variants: ["pringles", "pringle"], label: "Pringles" },
     { variants: ["oreo"], label: "Oreo" },
-    { variants: ["ferrero", "rocher", "ferrerorocher"], label: "Ferrero Rocher" },
-    { variants: ["horizon", "organic", "horizonorganic"], label: "Horizon Organic" },
+    { variants: ["ferrero rocher", "ferrerorocher", "ferrero", "rocher"], label: "Ferrero Rocher" },
+    { variants: ["horizon organic", "horizonorganic", "horizon"], label: "Horizon Organic" },
     { variants: ["fairlife"], label: "Fairlife" },
-    { variants: ["organicvalley", "valley"], label: "Organic Valley" },
+    { variants: ["organic valley", "organicvalley"], label: "Organic Valley" },
     { variants: ["silk"], label: "Silk" },
     { variants: ["oatly"], label: "Oatly" },
     { variants: ["almondbreeze", "breeze"], label: "Almond Breeze" },
     { variants: ["hershey", "hersheys"], label: "Hershey's" },
-    { variants: ["kitkat", "kit", "kat"], label: "KitKat" },
+    { variants: ["kitkat", "kit kat"], label: "KitKat" },
     { variants: ["snickers"], label: "Snickers" },
     { variants: ["twix"], label: "Twix" },
     { variants: ["mms", "mm", "mnm", "mandm", "mandms"], label: "M&M's" },
@@ -24,17 +24,17 @@
     { variants: ["lindt"], label: "Lindt" },
     { variants: ["cadbury"], label: "Cadbury" },
     { variants: ["toblerone"], label: "Toblerone" },
-    { variants: ["cocacola", "coke", "coca"], label: "Coca-Cola" },
+    { variants: ["coca cola", "cocacola", "coke"], label: "Coca-Cola" },
     { variants: ["pepsi"], label: "Pepsi" },
     { variants: ["sprite"], label: "Sprite" },
     { variants: ["fanta"], label: "Fanta" },
     { variants: ["gatorade"], label: "Gatorade" },
     { variants: ["powerade"], label: "Powerade" },
     { variants: ["monster"], label: "Monster" },
-    { variants: ["redbull", "red", "bull"], label: "Red Bull" },
-    { variants: ["drpepper", "pepper"], label: "Dr Pepper" },
+    { variants: ["red bull", "redbull"], label: "Red Bull" },
+    { variants: ["dr pepper", "drpepper"], label: "Dr Pepper" },
     { variants: ["7up"], label: "7UP" },
-    { variants: ["mountaindew", "dew"], label: "Mountain Dew" },
+    { variants: ["mountain dew", "mountaindew"], label: "Mountain Dew" },
     { variants: ["旺旺", "旺仔", "wangwang", "wangzai"], label: "旺旺" },
     { variants: ["徐福记", "xufuji", "hsufuchi"], label: "徐福记" },
     { variants: ["盼盼", "panpan"], label: "盼盼" },
@@ -119,7 +119,7 @@
       .replace(/[|]/g, "I")
       .replace(/[®™]/g, " ")
       .replace(/\bclossic\b/gi, "classic")
-      .replace(/\bc|assic\b/gi, "classic")
+      .replace(/\bc[l|i]assic\b/gi, "classic")
       .replace(/\bclqssic\b/gi, "classic")
       .replace(/\bpototo\b/gi, "potato")
       .replace(/\bpototoes\b/gi, "potatoes")
@@ -344,8 +344,11 @@
     const tokens = lower.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
 
     const scored = PACKAGED_BRANDS.map((brand) => {
-      const directHit = brand.variants.some((variant) => lower.includes(variant));
+      const directHit = brand.variants.some((variant) => hasVariantMatch(lower, variant));
       const fuzzyHit = brand.variants.reduce((best, variant) => {
+        if (variant.length < 5) {
+          return best;
+        }
         return Math.max(best, ...tokens.map((token) => similarityScore(token, variant)));
       }, 0);
 
@@ -360,6 +363,22 @@
     }
 
     return scored[0];
+  }
+
+  function hasVariantMatch(text, variant) {
+    const normalizedText = String(text || "").toLowerCase();
+    const normalizedVariant = String(variant || "").toLowerCase().trim();
+    if (!normalizedText || !normalizedVariant) {
+      return false;
+    }
+
+    if (/[\u4e00-\u9fff]/.test(normalizedVariant)) {
+      return normalizedText.includes(normalizedVariant);
+    }
+
+    const escapedVariant = normalizedVariant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])${escapedVariant}([^\\p{L}\\p{N}]|$)`, "u");
+    return pattern.test(normalizedText);
   }
 
   function isLowQualityNameCandidate(value) {

@@ -14,6 +14,26 @@ if (!window.FreshTrackerPicVegetable) {
   throw new Error("picVegetable.js did not load. Check vegetable photo recognition helpers.");
 }
 
+if (!window.FreshTrackerPicMeat) {
+  throw new Error("picMeat.js did not load. Check meat photo recognition helpers.");
+}
+
+if (!window.FreshTrackerPicBakery) {
+  throw new Error("picBakery.js did not load. Check bakery photo recognition helpers.");
+}
+
+if (!window.FreshTrackerPicDessert) {
+  throw new Error("picDessert.js did not load. Check dessert photo recognition helpers.");
+}
+
+if (!window.FreshTrackerPicFlavor) {
+  throw new Error("picFlavor.js did not load. Check flavor photo recognition helpers.");
+}
+
+if (!window.FreshTrackerPicFrozen) {
+  throw new Error("picFrozen.js did not load. Check frozen photo recognition helpers.");
+}
+
 const {
   DAY_MS: MS_PER_DAY,
   formatDisplayDate: formatFoodDisplayDate,
@@ -58,10 +78,46 @@ const {
 } = window.FreshTrackerAddPic;
 
 const {
+  VEGETABLE_ITEMS,
   normalizeVegetableOcrText,
   extractVegetableName,
   extractVegetableKeywordQuery
 } = window.FreshTrackerPicVegetable;
+
+const {
+  MEAT_ITEMS,
+  normalizeMeatOcrText,
+  extractMeatName,
+  extractMeatKeywordQuery
+} = window.FreshTrackerPicMeat;
+
+const {
+  BAKERY_ITEMS,
+  normalizeBakeryOcrText,
+  consumeBakeryMatch,
+  extractBakeryName,
+  extractBakeryKeywordQuery
+} = window.FreshTrackerPicBakery;
+
+const {
+  normalizeDessertOcrText,
+  consumeDessertMatch,
+  extractDessertName,
+  extractDessertKeywordQuery
+} = window.FreshTrackerPicDessert;
+
+const {
+  normalizeFlavorOcrText,
+  consumeFlavorMatch,
+  extractFlavorKeywordQuery
+} = window.FreshTrackerPicFlavor;
+
+const {
+  normalizeFrozenOcrText,
+  consumeFrozenMatch,
+  extractFrozenName,
+  extractFrozenKeywordQuery
+} = window.FreshTrackerPicFrozen;
 
 const {
   reminderStrategies,
@@ -1815,7 +1871,7 @@ function revokeCapturedPhotoUrls() {
 
 function buildPhotoReviewItems() {
   return state.photoFiles.map((photo, index) => {
-    const recognition = recognizePhotoDraft(photo, "", index);
+    const recognition = recognizePhotoDraft(photo, createOcrContext(), index);
     return {
       id: `review-${photo.id}`,
       photoId: photo.id,
@@ -1823,16 +1879,21 @@ function buildPhotoReviewItems() {
       icon: recognition.icon,
       name: recognition.name,
       expiryDate: recognition.expiryDate,
-      missingFields: recognition.missingFields
+      missingFields: recognition.missingFields,
+      ocrDebug: {
+        candidateRegions: [],
+        text: ""
+      }
     };
   });
 }
 
-function recognizePhotoDraft(photo, recognizedText, index) {
+function recognizePhotoDraft(photo, ocrContext, index) {
   const fileName = String(photo.name || "");
   const stem = fileName.replace(/\.[^.]+$/, "");
+  const recognizedText = getOcrText(ocrContext);
   const expiryDate = extractExpiryDateFromText(recognizedText) || extractDateFromPhotoName(stem);
-  const name = extractNameFromText(recognizedText) || extractNameFromPhotoName(stem);
+  const name = extractNameFromText(ocrContext) || extractNameFromPhotoName(stem);
   const normalizedName = String(name || "").trim();
 
   return {
@@ -1844,6 +1905,197 @@ function recognizePhotoDraft(photo, recognizedText, index) {
       ...(expiryDate ? [] : ["expiryDate"])
     ]
   };
+}
+
+function createOcrContext(data) {
+  const ocrData = data && typeof data === "object" ? data : {};
+  const text = String(ocrData.text || "");
+  const lines = Array.isArray(ocrData.lines) ? ocrData.lines : [];
+  const words = Array.isArray(ocrData.words) ? ocrData.words : [];
+
+  return {
+    text,
+    lines,
+    words,
+    candidateRegions: buildCandidateNameRegions({ text, lines, words })
+  };
+}
+
+function getOcrText(ocrInput) {
+  if (!ocrInput) {
+    return "";
+  }
+  if (typeof ocrInput === "string") {
+    return ocrInput;
+  }
+  return String(ocrInput.text || "");
+}
+
+function buildCandidateNameRegions(ocrContext) {
+  const lines = Array.isArray(ocrContext?.lines) ? ocrContext.lines : [];
+  const lineRegions = lines
+    .map((line, index) => buildCandidateRegionFromLine(line, index))
+    .filter(Boolean);
+  const mergedRegions = buildMergedCandidateRegions(lineRegions);
+  const dedupedRegions = dedupeCandidateRegions([...mergedRegions, ...lineRegions])
+    .sort((a, b) => b.score - a.score);
+
+  return dedupedRegions.slice(0, 8);
+}
+
+function buildCandidateRegionFromLine(line, index) {
+  const text = String(line?.text || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return null;
+  }
+
+  const normalized = text.toLowerCase();
+  if (normalized.length < 3 || normalized.length > 64) {
+    return null;
+  }
+
+  const blockedPatterns = [
+    /\bnutrition facts\b/i,
+    /\bingredients\b/i,
+    /\bbarcode\b/i,
+    /\bdistributed by\b/i,
+    /\bserving size\b/i,
+    /\bkeep refrigerated\b/i,
+    /\bnet wt\b/i,
+    /\bexp\b/i,
+    /\bbest by\b/i,
+    /\buse by\b/i,
+    /\bsell by\b/i
+  ];
+  if (blockedPatterns.some((pattern) => pattern.test(text))) {
+    return null;
+  }
+
+  const bbox = line?.bbox || {};
+  const x0 = Number.isFinite(bbox.x0) ? bbox.x0 : 0;
+  const x1 = Number.isFinite(bbox.x1) ? bbox.x1 : 0;
+  const y0 = Number.isFinite(bbox.y0) ? bbox.y0 : 0;
+  const y1 = Number.isFinite(bbox.y1) ? bbox.y1 : 0;
+  const width = Math.max(0, x1 - x0);
+  const height = Math.max(0, y1 - y0);
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+
+  let score = 0;
+  score += Math.min(18, text.length);
+  score += Math.min(12, wordCount * 3);
+  score += Math.min(24, height * 0.18);
+  score += Math.min(12, width * 0.015);
+  if (/^[A-Z0-9\s&'()-]+$/.test(text)) {
+    score += 6;
+  }
+  if (/[A-Za-z]/.test(text) && !/\d{3,}/.test(text)) {
+    score += 5;
+  }
+  if (/(cake|bread|bun|croissant|muffin|cookie|donut|ice cream|gelato|sorbet|pork|beef|chicken|lettuce|spinach|broccoli)/i.test(text)) {
+    score += 8;
+  }
+  if (/(www|http|distributed|ingredients|nutrition|serving|barcode|net wt)/i.test(text)) {
+    score -= 12;
+  }
+
+  return {
+    text,
+    score,
+    lineIndex: index,
+    lineIndexes: [index],
+    bbox: { x0, x1, y0, y1, width, height }
+  };
+}
+
+function buildMergedCandidateRegions(lineRegions) {
+  const sorted = [...lineRegions].sort((a, b) => {
+    const verticalGap = a.bbox.y0 - b.bbox.y0;
+    if (verticalGap !== 0) {
+      return verticalGap;
+    }
+    return a.bbox.x0 - b.bbox.x0;
+  });
+  const merged = [];
+
+  for (let index = 0; index < sorted.length; index += 1) {
+    let current = sorted[index];
+    for (let nextIndex = index + 1; nextIndex < sorted.length; nextIndex += 1) {
+      const next = sorted[nextIndex];
+      if (!canMergeCandidateRegions(current, next)) {
+        if (next.bbox.y0 - current.bbox.y1 > Math.max(current.bbox.height, next.bbox.height) * 1.8) {
+          break;
+        }
+        continue;
+      }
+      current = mergeCandidateRegions(current, next);
+      if (current.lineIndexes.length >= 3) {
+        break;
+      }
+    }
+
+    if (current.lineIndexes.length > 1) {
+      merged.push(current);
+    }
+  }
+
+  return merged;
+}
+
+function canMergeCandidateRegions(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+
+  const verticalGap = right.bbox.y0 - left.bbox.y1;
+  const maxGap = Math.max(left.bbox.height, right.bbox.height) * 1.25;
+  if (verticalGap < -Math.min(left.bbox.height, right.bbox.height) * 0.35 || verticalGap > maxGap) {
+    return false;
+  }
+
+  const leftAlignmentDelta = Math.abs(left.bbox.x0 - right.bbox.x0);
+  const centerLeft = (left.bbox.x0 + left.bbox.x1) / 2;
+  const centerRight = (right.bbox.x0 + right.bbox.x1) / 2;
+  const centerDelta = Math.abs(centerLeft - centerRight);
+  const maxHorizontalDrift = Math.max(left.bbox.width, right.bbox.width) * 0.35;
+
+  return leftAlignmentDelta <= maxHorizontalDrift || centerDelta <= maxHorizontalDrift;
+}
+
+function mergeCandidateRegions(top, bottom) {
+  const mergedText = `${top.text} ${bottom.text}`.replace(/\s+/g, " ").trim();
+  const x0 = Math.min(top.bbox.x0, bottom.bbox.x0);
+  const x1 = Math.max(top.bbox.x1, bottom.bbox.x1);
+  const y0 = Math.min(top.bbox.y0, bottom.bbox.y0);
+  const y1 = Math.max(top.bbox.y1, bottom.bbox.y1);
+  const width = Math.max(0, x1 - x0);
+  const height = Math.max(0, y1 - y0);
+  const lineIndexes = [...new Set([...(top.lineIndexes || []), ...(bottom.lineIndexes || [])])].sort((a, b) => a - b);
+
+  let score = top.score + bottom.score + 10;
+  score += Math.min(10, mergedText.length * 0.18);
+  if (/(matcha|red bean|cake|bread|ice cream|pork|beef|chicken|broccoli|spinach)/i.test(mergedText)) {
+    score += 8;
+  }
+
+  return {
+    text: mergedText,
+    score,
+    lineIndex: Math.min(top.lineIndex, bottom.lineIndex),
+    lineIndexes,
+    bbox: { x0, x1, y0, y1, width, height }
+  };
+}
+
+function dedupeCandidateRegions(regions) {
+  const seen = new Set();
+  return regions.filter((region) => {
+    const key = `${String(region.text || "").toLowerCase()}::${(region.lineIndexes || [region.lineIndex]).join(",")}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function extractDateFromPhotoName(value) {
@@ -1915,7 +2167,7 @@ function extractNameFromPhotoName(value) {
     .replace(/\.[^.]+$/, "")
     .replace(/(20\d{2})[-_]?([01]\d)[-_]?([0-3]\d)/g, " ")
     .replace(/([01]?\d)[-_]([0-3]?\d)[-_](20\d{2})/g, " ")
-    .replace(/\b(img|image|photo|scan|capture|dsc|pxl|mvimg)\b/gi, " ")
+    .replace(/\b(img|image|photo|scan|capture|dsc|pxl|mvimg|snipaste|screenshot)\b/gi, " ")
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -1930,12 +2182,261 @@ function extractNameFromPhotoName(value) {
     .join(" ");
 }
 
+function scoreRecognizedFoodName(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return 0;
+  }
+
+  const normalized = text.toLowerCase();
+  const words = normalized.split(/\s+/).filter(Boolean);
+  let score = 0;
+  score += Math.min(24, text.length);
+  score += Math.min(16, words.length * 4);
+  if (words.length >= 2) {
+    score += 8;
+  }
+  if (/\b(matcha|red bean|chocolate|vanilla|strawberry|mango|blueberry|coffee|caramel|mint|cookies|cream)\b/.test(normalized)) {
+    score += 10;
+  }
+  if (/\b(cake|bread|pastry|cookie|donut|ice cream|gelato|sorbet|pudding|pizza|dumplings|fries)\b/.test(normalized)) {
+    score += 8;
+  }
+  if (/\b(cake|bread|pudding|ice cream)\b/.test(normalized) && words.length === 1) {
+    score -= 6;
+  }
+  return score;
+}
+
+function normalizeSequentialKeywordText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[®™]/g, " ")
+    .replace(/[^\p{L}\p{N}\s'-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildKeywordBoundaryPattern(variant) {
+  const escaped = escapeRegex(String(variant || "").trim().toLowerCase());
+  if (!escaped) {
+    return null;
+  }
+
+  return new RegExp(`(^|[^\\p{L}\\p{N}])(${escaped})(?=[^\\p{L}\\p{N}]|$)`, "u");
+}
+
+function consumeKeywordMatch(text, variant) {
+  const pattern = buildKeywordBoundaryPattern(variant);
+  if (!pattern) {
+    return null;
+  }
+
+  const match = pattern.exec(String(text || ""));
+  if (!match) {
+    return null;
+  }
+
+  const full = match[0];
+  const prefix = match[1] || "";
+  const matchedText = match[2] || "";
+  const start = match.index + prefix.length;
+  const end = start + matchedText.length;
+  const remainingText = `${text.slice(0, start)} ${text.slice(end)}`.replace(/\s+/g, " ").trim();
+
+  return {
+    matchedText,
+    remainingText
+  };
+}
+
+function findBestKeywordEntry(text, entries) {
+  const normalizedText = normalizeSequentialKeywordText(text);
+  let best = null;
+
+  entries.forEach((entry) => {
+    (entry.variants || []).forEach((variant) => {
+      const consumed = consumeKeywordMatch(normalizedText, variant);
+      if (!consumed) {
+        return;
+      }
+
+      const score = String(variant).length;
+      if (!best || score > best.score) {
+        best = {
+          entry,
+          variant,
+          score,
+          remainingText: consumed.remainingText
+        };
+      }
+    });
+  });
+
+  return best;
+}
+
+function buildSequentialKeywordRecognition(rawText) {
+  const normalizedText = normalizeSequentialKeywordText(
+    normalizeDessertOcrText(normalizeFrozenOcrText(normalizeFlavorOcrText(rawText)))
+  );
+  if (!normalizedText) {
+    return null;
+  }
+
+  const primaryMatch = [
+    (() => {
+      const match = consumeBakeryMatch(normalizedText);
+      return match ? { ...match, kind: "bakery", score: String(match.matchedVariant || "").length } : null;
+    })(),
+    (() => {
+      const match = consumeDessertMatch(normalizedText);
+      return match ? { ...match, kind: "dessert", score: String(match.matchedVariant || "").length } : null;
+    })(),
+    (() => {
+      const match = consumeFrozenMatch(normalizedText);
+      return match ? { ...match, kind: "frozen", score: String(match.matchedVariant || "").length } : null;
+    })(),
+    (() => {
+      const match = findBestKeywordEntry(normalizedText, VEGETABLE_ITEMS);
+      return match ? { ...match, kind: "vegetable" } : null;
+    })(),
+    (() => {
+      const match = findBestKeywordEntry(normalizedText, MEAT_ITEMS);
+      return match ? { ...match, kind: "meat" } : null;
+    })()
+  ]
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score)[0];
+
+  if (!primaryMatch) {
+    return null;
+  }
+
+  let remainingText = primaryMatch.remainingText;
+  const modifiers = [];
+  const usedModifierNames = new Set();
+
+  for (let step = 0; step < 3; step += 1) {
+    const modifierMatch = consumeFlavorMatch(remainingText);
+    if (!modifierMatch) {
+      break;
+    }
+    if (usedModifierNames.has(modifierMatch.matchedName)) {
+      break;
+    }
+
+    modifiers.push(modifierMatch.matchedName);
+    usedModifierNames.add(modifierMatch.matchedName);
+    remainingText = modifierMatch.remainingText;
+  }
+
+  const primaryName = primaryMatch.entry?.name || primaryMatch.matchedName;
+  const nameParts = [...modifiers, primaryName].filter(Boolean);
+  if (!nameParts.length) {
+    return null;
+  }
+
+  return {
+    kind: primaryMatch.kind,
+    name: nameParts.join(" "),
+    remainingText
+  };
+}
+
 function extractNameFromText(value) {
-  const rawText = String(value || "");
+  const ocrText = getOcrText(value);
+  const candidateRegions = Array.isArray(value?.candidateRegions) ? value.candidateRegions : [];
+  const candidateTexts = candidateRegions.map((region) => region.text).filter(Boolean);
+  const textsToTry = [...candidateTexts, ocrText].filter(Boolean);
+  const recognizedCandidates = [];
+
+  for (const rawText of textsToTry) {
+    const sequentialKeywordRecognition = buildSequentialKeywordRecognition(rawText);
+    if (sequentialKeywordRecognition?.name) {
+      recognizedCandidates.push(sequentialKeywordRecognition.name);
+    }
+
+    const normalizedVegetableText = normalizeVegetableOcrText(rawText);
+    const vegetableName = extractVegetableName(normalizedVegetableText);
+    if (vegetableName) {
+      recognizedCandidates.push(vegetableName);
+    }
+
+    const normalizedMeatText = normalizeMeatOcrText(rawText);
+    const meatName = extractMeatName(normalizedMeatText);
+    if (meatName) {
+      recognizedCandidates.push(meatName);
+    }
+
+    const normalizedBakeryText = normalizeBakeryOcrText(rawText);
+    const bakeryMatch = consumeBakeryMatch(normalizedBakeryText);
+    if (bakeryMatch?.matchedName) {
+      recognizedCandidates.push(bakeryMatch.matchedName);
+    }
+
+    const normalizedDessertText = normalizeDessertOcrText(rawText);
+    const dessertName = extractDessertName(normalizedDessertText);
+    if (dessertName) {
+      recognizedCandidates.push(dessertName);
+    }
+
+    const normalizedFrozenText = normalizeFrozenOcrText(rawText);
+    const frozenName = extractFrozenName(normalizedFrozenText);
+    if (frozenName) {
+      recognizedCandidates.push(frozenName);
+    }
+
+    const normalizedText = normalizeOcrText(rawText);
+    const packagedName = extractPackagedFoodName(normalizedText);
+    if (packagedName) {
+      recognizedCandidates.push(packagedName);
+    }
+  }
+
+  if (recognizedCandidates.length) {
+    return [...new Set(recognizedCandidates)]
+      .sort((a, b) => scoreRecognizedFoodName(b) - scoreRecognizedFoodName(a))[0];
+  }
+
+  const rawText = ocrText;
+  const sequentialKeywordRecognition = buildSequentialKeywordRecognition(rawText);
+  if (sequentialKeywordRecognition?.name) {
+    return sequentialKeywordRecognition.name;
+  }
+
   const normalizedVegetableText = normalizeVegetableOcrText(rawText);
   const vegetableName = extractVegetableName(normalizedVegetableText);
   if (vegetableName) {
     return vegetableName;
+  }
+
+  const normalizedMeatText = normalizeMeatOcrText(rawText);
+  const meatName = extractMeatName(normalizedMeatText);
+  if (meatName) {
+    return meatName;
+  }
+
+  const normalizedBakeryText = normalizeBakeryOcrText(rawText);
+  const bakeryMatch = consumeBakeryMatch(normalizedBakeryText);
+  if (bakeryMatch?.matchedName) {
+    return bakeryMatch.matchedName;
+  }
+
+  const normalizedDessertText = normalizeDessertOcrText(rawText);
+  const dessertName = extractDessertName(normalizedDessertText);
+  if (dessertName) {
+    return dessertName;
+  }
+
+  const normalizedFrozenText = normalizeFrozenOcrText(rawText);
+  const frozenName = extractFrozenName(normalizedFrozenText);
+  if (frozenName) {
+    return frozenName;
   }
 
   const normalizedText = normalizeOcrText(rawText);
@@ -2030,10 +2531,13 @@ function inferIconFromName(name) {
   if (/(spinach|lettuce|romaine|bok choy|water spinach|amaranth|carrot|daikon|potato|sweet potato|lotus root|tomato|cucumber|eggplant|aubergine|bell pepper|pumpkin|squash|bitter melon|bitter gourd|garlic|leek|green onion|spring onion|ginger|onion|green beans|string beans|peas|edamame|soybean sprouts|mung bean sprouts|shiitake|enoki|oyster mushroom|king oyster mushroom|broccoli|cauliflower|gai lan|chinese broccoli|vegetable|salad)/.test(value)) {
     return "eco";
   }
+  if (/(pork|beef|chicken|lamb|mutton|duck|turkey|goose|rabbit|venison|horse meat|sausage|bacon|ham|steak|ground meat|minced meat)/.test(value)) {
+    return "kebab_dining";
+  }
   if (/(egg)/.test(value)) {
     return "egg";
   }
-  if (/(bread|toast|bagel)/.test(value)) {
+  if (/(bread|toast|bagel|bun|croissant|muffin|cake|cupcake|cheesecake|swiss roll|sponge cake|pound cake|pastry|danish|tart|pie|donut|cookie)/.test(value)) {
     return "bakery_dining";
   }
   if (/(pizza)/.test(value)) {
@@ -2062,15 +2566,18 @@ async function runPhotoRecognitionFlow() {
       openModal();
 
       let recognizedText = "";
+      let ocrContext = createOcrContext();
       try {
         const result = await worker.recognize(photo.file);
-        recognizedText = String(result?.data?.text || "");
+        ocrContext = createOcrContext(result?.data);
+        recognizedText = getOcrText(ocrContext);
+        console.debug("OCR candidate regions:", ocrContext.candidateRegions.map((region) => region.text));
       } catch (error) {
         console.warn("Photo OCR failed for", photo.name, error);
       }
 
-      let recognition = recognizePhotoDraft(photo, recognizedText, index);
-      const searchQuery = buildProductSearchQuery(recognition.name, recognizedText);
+      let recognition = recognizePhotoDraft(photo, ocrContext, index);
+      const searchQuery = buildProductSearchQuery(recognition.name, ocrContext);
       if (searchQuery) {
         state.photoRecognitionStatus = `Matching product ${index + 1} of ${state.photoFiles.length} with Open Food Facts...`;
         renderApp();
@@ -2098,7 +2605,11 @@ async function runPhotoRecognitionFlow() {
         icon: recognition.icon,
         name: recognition.name,
         expiryDate: recognition.expiryDate,
-        missingFields: recognition.missingFields
+        missingFields: recognition.missingFields,
+        ocrDebug: {
+          candidateRegions: (ocrContext.candidateRegions || []).map((region) => region.text),
+          text: getOcrText(ocrContext)
+        }
       });
     }
 
@@ -2163,26 +2674,86 @@ async function getTesseractWorker() {
 }
 
 function buildProductSearchQuery(nameCandidate, recognizedText) {
-  const normalizedVegetableText = normalizeVegetableOcrText(recognizedText);
-  const vegetableName = extractVegetableName(normalizedVegetableText);
-  if (vegetableName) {
-    return "";
-  }
+  const ocrText = getOcrText(recognizedText);
+  const candidateRegions = Array.isArray(recognizedText?.candidateRegions) ? recognizedText.candidateRegions : [];
+  const textsToTry = [...candidateRegions.map((region) => region.text).filter(Boolean), ocrText].filter(Boolean);
 
-  const normalizedText = normalizeOcrText(recognizedText);
-  const packagedName = extractPackagedFoodName(normalizedText);
-  if (packagedName) {
-    return packagedName;
-  }
+  for (const text of textsToTry) {
+    const sequentialKeywordRecognition = buildSequentialKeywordRecognition(text);
+    if (sequentialKeywordRecognition?.name) {
+      return "";
+    }
 
-  const packagedKeywords = extractPackagedFoodKeywordQuery(normalizedText);
-  if (packagedKeywords) {
-    return packagedKeywords;
-  }
+    const normalizedVegetableText = normalizeVegetableOcrText(text);
+    const vegetableName = extractVegetableName(normalizedVegetableText);
+    if (vegetableName) {
+      return "";
+    }
 
-  const vegetableKeywords = extractVegetableKeywordQuery(normalizedVegetableText);
-  if (vegetableKeywords) {
-    return "";
+    const normalizedMeatText = normalizeMeatOcrText(text);
+    const meatName = extractMeatName(normalizedMeatText);
+    if (meatName) {
+      return "";
+    }
+
+    const normalizedBakeryText = normalizeBakeryOcrText(text);
+    const bakeryMatch = consumeBakeryMatch(normalizedBakeryText);
+    if (bakeryMatch?.matchedName) {
+      return "";
+    }
+
+    const normalizedDessertText = normalizeDessertOcrText(text);
+    const dessertName = extractDessertName(normalizedDessertText);
+    if (dessertName) {
+      return "";
+    }
+
+    const normalizedFrozenText = normalizeFrozenOcrText(text);
+    const frozenName = extractFrozenName(normalizedFrozenText);
+    if (frozenName) {
+      return "";
+    }
+
+    const normalizedText = normalizeOcrText(text);
+    const packagedName = extractPackagedFoodName(normalizedText);
+    if (packagedName) {
+      return packagedName;
+    }
+
+    const packagedKeywords = extractPackagedFoodKeywordQuery(normalizedText);
+    if (packagedKeywords) {
+      return packagedKeywords;
+    }
+
+    const vegetableKeywords = extractVegetableKeywordQuery(normalizedVegetableText);
+    if (vegetableKeywords) {
+      return "";
+    }
+
+    const meatKeywords = extractMeatKeywordQuery(normalizedMeatText);
+    if (meatKeywords) {
+      return "";
+    }
+
+    const bakeryKeywords = extractBakeryKeywordQuery(normalizedBakeryText);
+    if (bakeryKeywords) {
+      return "";
+    }
+
+    const dessertKeywords = extractDessertKeywordQuery(normalizedDessertText);
+    if (dessertKeywords) {
+      return "";
+    }
+
+    const frozenKeywords = extractFrozenKeywordQuery(normalizedFrozenText);
+    if (frozenKeywords) {
+      return "";
+    }
+
+    const flavorKeywords = extractFlavorKeywordQuery(normalizeFlavorOcrText(text));
+    if (flavorKeywords && !packagedKeywords) {
+      return "";
+    }
   }
 
   const preferred = String(nameCandidate || "").trim();
@@ -2190,7 +2761,7 @@ function buildProductSearchQuery(nameCandidate, recognizedText) {
     return preferred;
   }
 
-  const lines = normalizedText
+  const lines = normalizeOcrText(ocrText)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
