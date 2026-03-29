@@ -1,0 +1,19 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "freshness-above-all",
+	"main": "src/worker.mjs",
+	"compatibility_date": "2026-03-27",
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./public"
+  },
+  "d1_databases": [
+		{
+		"binding": "DB",
+		"database_name": "freshness-above-all",
+		"database_id": "4976aa14-190a-4969-baca-8cfcad820850",
+		"remote": true
+		}
+
+	]
+}

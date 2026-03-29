@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "sync:public": "node scripts/sync-public.mjs",
+    "dev": "npm run sync:public && npx wrangler dev",
+    "start": "npm run sync:public && npx wrangler dev",
+    "deploy": "npm run sync:public && npx wrangler deploy",
+    "db:migrate:local": "npx wrangler d1 execute DB --local --file=schema.sql",
+    "db:migrate:remote": "npx wrangler d1 execute DB --remote --file=schema.sql",
+    "db:migrate-owner-scope:remote": "npx wrangler d1 execute DB --remote --file=migrate-owner-scope.sql",
+    "db:seed:export": "node scripts/export-seed.mjs"
   }
 }

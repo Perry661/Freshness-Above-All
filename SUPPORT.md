@@ -243,6 +243,17 @@ As long as the item is still in `Trash`, it can be restored to the main inventor
 当前版本中的提醒和日历功能仍以原型展示和界面组织为主，部分行为还没有实现成完整通知系统。  
 In the current version, reminder and calendar behavior is still mostly at the prototype and UI level, and not all interactions are implemented as a full notification system yet.
 
+### Why do I still see the previous account's data right after logging in or switching accounts? | 为什么登录或切换账号后，页面上还是上一个账号的数据？
+
+当前版本中，账号切换后的页面数据有时不会立即自动刷新。  
+In the current version, page data may not refresh immediately after logging in or switching accounts.
+
+如果你已经成功登录，但看到的还是上一个账号的数据，请先手动刷新页面一次。  
+If you have already signed in successfully but still see the previous account's data, refresh the page once manually.
+
+刷新后，页面会重新加载当前账号对应的数据。  
+After refreshing, the app will reload the data that belongs to the currently signed-in account.
+
 ## Troubleshooting | 故障排查
 
 ### The app does not open correctly | 应用无法正常打开

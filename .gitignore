@@ -5,3 +5,7 @@ setting.json
 **/.DS_Store
 account.json
 addSetting.json
+.wrangler
+node_modules
+seed.sql
+public/**/.DS_Store

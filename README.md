@@ -1,8 +1,8 @@
 # Freshness Above All!
 
-"Freshness Above All!" is a local-first food expiration tracker prototype for managing household food inventory, monitoring expiry dates, and reducing food waste.
+"Freshness Above All!" is a food expiration tracker for managing household food inventory, monitoring expiry dates, and reducing food waste.
 
-The app includes a dashboard, an all-food inventory view, add/edit flows, a trash system with restore support, settings persistence, and food detail sheets. Data is stored locally in JSON files, so it works well as a lightweight prototype without a database.
+The app includes a dashboard, an all-food inventory view, add/edit flows, a trash system with restore support, settings persistence, and food detail sheets. The current deployment target is Cloudflare Workers with D1 for persistence.
 
 ## Current Features
 
@@ -15,51 +15,100 @@ The app includes a dashboard, an all-food inventory view, add/edit flows, a tras
 - Trash page with restore support and deleted-item detail view
 - Settings page with reminder strategy, theme, and trash retention controls
 - Barcode lookup via Open Food Facts for unknown products
-- Settings persistence via `setting.json`
-- Local data persistence via `food.json`, `trash.json`, and `setting.json`
+- Settings persistence via Cloudflare D1
+- Cloud-backed data persistence for foods, trash, and lightweight auth session state
 
 ## Tech Stack
 
 - Vanilla JavaScript
 - Tailwind CSS via CDN
-- Node.js built-in `http` server
-- Local JSON file storage
+- Cloudflare Workers
+- Cloudflare D1
 
-## How to Run
+## Cloudflare Setup
 
-1. Install dependencies:
-
-```bash
-npm install
-```
-
-2. Start the local server:
+1. Create a D1 database:
 
 ```bash
-npm start
+npx wrangler d1 create freshness-above-all
 ```
 
-3. Open the app in your browser:
+2. Copy the returned `database_id` into [`wrangler.jsonc`](/Users/dongperry/code/Freshness-Above-All/wrangler.jsonc).
 
-```text
-http://localhost:3000
+3. Apply the schema:
+
+```bash
+npm run db:migrate:remote
 ```
+
+4. If you already deployed the older single-tenant schema, migrate it to owner-scoped storage first:
+
+```bash
+npm run db:migrate-owner-scope:remote
+```
+
+5. Optional: export your existing local JSON data into a seed file:
+
+```bash
+npm run db:seed:export
+npx wrangler d1 execute DB --remote --file=seed.sql
+```
+
+6. Deploy:
+
+```bash
+npm run deploy
+```
+
+### Email Verification Setup
+
+1. Add your Resend API key as a Worker secret:
+
+```bash
+npx wrangler secret put RESEND_API_KEY
+```
+
+2. Apply the latest schema so `verification_codes` exists:
+
+```bash
+npm run db:migrate:remote
+```
+
+3. Deploy again:
+
+```bash
+npm run deploy
+```
+
+
+## Local Development
+
+1. Apply the schema to the local D1 database:
+
+```bash
+npm run db:migrate:local
+```
+
+2. Start the worker locally:
+
+```bash
+npm run dev
+```
+
+3. `npm run dev` will refresh `public/` first, then start Wrangler.
+4. Open the local URL printed by Wrangler.
 
 ## Camera Access For Barcode Scan
 
-Barcode scanning only works when the app is opened through the local server in a browser.
+Barcode scanning only works when the app is opened through the Worker URL in a browser.
 
-1. Start the local server:
+1. Start the app:
 
 ```bash
-npm start
+npm run dev
 ```
 
-2. Open the app at:
-
-```text
-http://localhost:3000
-```
+2. Open the local Worker URL printed by Wrangler
 
 3. Open `Add Food`
 4. Choose `Scan Barcode`
@@ -100,34 +149,32 @@ If the camera does not open, check:
 - [`scan.js`](/Users/dongperry/code/Freshness-Above-All/scan.js): barcode scan controller
 - [`setting.js`](/Users/dongperry/code/Freshness-Above-All/setting.js): settings UI and settings helpers
 - [`trash.js`](/Users/dongperry/code/Freshness-Above-All/trash.js): trash UI, cleanup flow, trash detail helpers
-- [`server.js`](/Users/dongperry/code/Freshness-Above-All/server.js): local API, Open Food Facts lookup, and static file server
-- [`food.json`](/Users/dongperry/code/Freshness-Above-All/food.json): active food inventory
-- [`trash.json`](/Users/dongperry/code/Freshness-Above-All/trash.json): deleted items waiting for permanent removal
-- [`setting.json`](/Users/dongperry/code/Freshness-Above-All/setting.json): persisted app settings
+- [`src/worker.mjs`](/Users/dongperry/code/Freshness-Above-All/src/worker.mjs): Cloudflare Worker API and static asset entrypoint
+- [`schema.sql`](/Users/dongperry/code/Freshness-Above-All/schema.sql): D1 schema for foods, trash, app state, users, and sessions
+- [`public/index.html`](/Users/dongperry/code/Freshness-Above-All/public/index.html): static app shell served by Cloudflare assets
+- [`scripts/export-seed.mjs`](/Users/dongperry/code/Freshness-Above-All/scripts/export-seed.mjs): exports local JSON files into `seed.sql`
 
 ## Data Persistence
 
-"Freshness Above All!" currently uses local JSON files instead of a database.
+The deployed app stores data in Cloudflare D1.
 
-- Active inventory is stored in `food.json`
-- Trash / recycle-bin data is stored in `trash.json`
-- App settings are stored in `setting.json`
-
-This means the project is currently best treated as a single-user local prototype.
+- `foods` table stores active inventory items
+- `trash_items` table stores deleted items waiting for permanent removal
+- `app_state` stores settings and add-settings payloads
+- `users` and `sessions` support the lightweight email-only auth flow
 
 ## Interaction Highlights
 
 - Delete an item -> choose a cleanup reason -> move it to Trash
 - Restore an item from Trash back into the main inventory
 - Open food details by clicking the item icon or title in All Food
-- Save settings permanently through `setting.json`
+- Save settings permanently through D1
 - Use batch cleanup from the All Food inventory page
 
 ## Known Limitations
 
-- No user authentication
-- No cloud sync or shared storage
-- No database
+- Auth is still email-only and intentionally lightweight
+- Data model is still single-tenant and not scoped per account
 - No real image upload pipeline yet
 - Calendar / notification behavior is still mostly UI-level
 - Sound effects are planned but not implemented yet
