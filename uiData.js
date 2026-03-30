@@ -200,20 +200,6 @@ function loginWithEmail(email) {
   });
 }
 
-function sendVerificationCode(email) {
-  return request("/api/auth/code/send", {
-    method: "POST",
-    body: JSON.stringify({ email })
-  });
-}
-
-function verifyEmailCode(email, code) {
-  return request("/api/auth/code/verify", {
-    method: "POST",
-    body: JSON.stringify({ email, code })
-  });
-}
-
 function logoutSession() {
   return request("/api/auth/logout", {
     method: "POST",
@@ -295,8 +281,6 @@ window.FreshTrackerData = {
   fetchAuthSession,
   registerWithEmail,
   loginWithEmail,
-  sendVerificationCode,
-  verifyEmailCode,
   logoutSession,
   deleteCurrentAccount,
   updateSettingsOnServer,

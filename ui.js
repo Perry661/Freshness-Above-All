@@ -44,8 +44,6 @@ const {
   fetchAuthSession: fetchAuthSessionFromApi,
   registerWithEmail: registerWithEmailFromApi,
   loginWithEmail: loginWithEmailFromApi,
-  sendVerificationCode: sendVerificationCodeFromApi,
-  verifyEmailCode: verifyEmailCodeFromApi,
   logoutSession: logoutSessionFromApi,
   deleteCurrentAccount: deleteCurrentAccountFromApi,
   createFoodItem: buildFoodItem,
@@ -216,11 +214,9 @@ const state = {
   settings: getDefaultSettings(),
   account: { authenticated: false, user: null },
   showAuthSheet: false,
+  authMode: "login",
   authEmail: "",
-  authPendingEmail: "",
-  authCode: "",
   authError: "",
-  authMessage: "",
   reminderDraft: null,
   cleanupDraft: null,
   lastRenderedView: "dashboard",
@@ -674,10 +670,7 @@ async function handleClick(event) {
   if (event.target.closest("#open-auth-sheet")) {
     state.showAuthSheet = true;
     state.authError = "";
-    state.authMessage = "";
     state.authEmail = state.account?.user?.email || "";
-    state.authPendingEmail = "";
-    state.authCode = "";
     renderApp();
     return;
   }
@@ -685,21 +678,14 @@ async function handleClick(event) {
   if (event.target.closest("#close-auth-sheet") || event.target.id === "auth-sheet-overlay") {
     state.showAuthSheet = false;
     state.authError = "";
-    state.authMessage = "";
     renderApp();
     return;
   }
 
-  if (event.target.closest("#resend-auth-code")) {
-    void handleSendVerificationCode(true);
-    return;
-  }
-
-  if (event.target.closest("#change-auth-email")) {
-    state.authPendingEmail = "";
-    state.authCode = "";
+  const authModeButton = event.target.closest("[data-auth-mode]");
+  if (authModeButton) {
+    state.authMode = authModeButton.dataset.authMode;
     state.authError = "";
-    state.authMessage = "";
     renderApp();
     return;
   }
@@ -1314,10 +1300,6 @@ async function handleChange(event) {
 
   if (event.target.name === "authEmail") {
     state.authEmail = event.target.value;
-  }
-
-  if (event.target.name === "authCode") {
-    state.authCode = String(event.target.value || "").replace(/\D/g, "").slice(0, 6);
   }
 
   if (event.target.dataset.reviewItemId && event.target.dataset.reviewField) {
@@ -2927,17 +2909,7 @@ async function savePhotoReviewItems() {
 }
 
 async function handleAuthSubmit() {
-  if (state.authPendingEmail) {
-    await handleVerifyEmailCode();
-    return;
-  }
-
-  await handleSendVerificationCode(false);
-}
-
-async function handleSendVerificationCode(isResend) {
   state.authError = "";
-  state.authMessage = "";
   const email = String(state.authEmail || "").trim().toLowerCase();
   if (!email) {
     state.authError = "Enter an email first.";
@@ -2946,41 +2918,11 @@ async function handleSendVerificationCode(isResend) {
   }
 
   try {
-    const response = await sendVerificationCodeFromApi(email);
-    state.authPendingEmail = email;
-    state.authCode = "";
-    state.authMessage = response?.message || (isResend ? "A new verification code was sent." : "Verification code sent.");
-  } catch (error) {
-    state.authError = error.message;
-  }
-
-  renderApp();
-}
-
-async function handleVerifyEmailCode() {
-  state.authError = "";
-  state.authMessage = "";
-  const email = String(state.authPendingEmail || "").trim().toLowerCase();
-  const code = String(state.authCode || "").replace(/\D/g, "").slice(0, 6);
-
-  if (!email) {
-    state.authError = "Enter an email first.";
-    renderApp();
-    return;
-  }
-
-  if (code.length !== 6) {
-    state.authError = "Enter the 6-digit verification code.";
-    renderApp();
-    return;
-  }
-
-  try {
-    state.account = await verifyEmailCodeFromApi(email, code);
+    state.account = state.authMode === "register"
+      ? await registerWithEmailFromApi(email)
+      : await loginWithEmailFromApi(email);
     state.showAuthSheet = false;
     state.authEmail = state.account?.user?.email || "";
-    state.authPendingEmail = "";
-    state.authCode = "";
   } catch (error) {
     state.authError = error.message;
   }
@@ -2997,10 +2939,7 @@ async function handleLogout() {
 
   state.showAuthSheet = false;
   state.authEmail = "";
-  state.authPendingEmail = "";
-  state.authCode = "";
   state.authError = "";
-  state.authMessage = "";
   renderApp();
 }
 
@@ -3013,10 +2952,7 @@ async function handleDeleteAccount() {
 
   state.showAuthSheet = false;
   state.authEmail = "";
-  state.authPendingEmail = "";
-  state.authCode = "";
   state.authError = "";
-  state.authMessage = "";
   renderApp();
 }
 

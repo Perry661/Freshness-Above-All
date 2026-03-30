@@ -15,7 +15,6 @@ const DEFAULT_ADD_SETTINGS = {
 const SESSION_COOKIE = "freshtracker_session";
 const GUEST_COOKIE = "freshtracker_guest";
 const LEGACY_OWNER = { type: "guest", id: "legacy-import" };
-const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000;
 
 export default {
   async fetch(request, env) {
@@ -192,60 +191,6 @@ async function handleApi(request, env, url) {
 
   if (pathname === "/api/auth/session" && request.method === "GET") {
     return jsonResponse(await getAuthSession(request, env), 200, context.cookies);
-  }
-
-  if (pathname === "/api/auth/code/send" && request.method === "POST") {
-    const email = validateAuthPayload(await readBody(request));
-    await sendVerificationCode(env, email);
-    return jsonResponse(
-      { success: true, message: "Verification code sent. Check your inbox." },
-      200,
-      context.cookies
-    );
-  }
-
-  if (pathname === "/api/auth/code/verify" && request.method === "POST") {
-    const body = await readBody(request);
-    const email = validateAuthPayload(body);
-    const code = String(body?.code || "").replace(/\D/g, "").slice(0, 6);
-    if (code.length !== 6) {
-      return jsonResponse({ error: "Verification code must be 6 digits." }, 400, context.cookies);
-    }
-
-    await verifyStoredCode(env, email, code);
-
-    const existing = await env.DB.prepare(
-      "SELECT email, name FROM users WHERE email = ?"
-    ).bind(email).first();
-
-    if (!existing) {
-      const createdAt = new Date().toISOString();
-      const name = getDisplayNameFromEmail(email);
-      await env.DB.prepare(
-        "INSERT INTO users (email, name, created_at) VALUES (?, ?, ?)"
-      ).bind(email, name, createdAt).run();
-      await claimGuestDataForNewUser(env, owner, email);
-    } else {
-      await copyOwnerData(env, LEGACY_OWNER, { type: "user", id: email });
-    }
-
-    const nextGuestId = crypto.randomUUID();
-    const sessionId = await createSession(env, email);
-    const user = await env.DB.prepare(
-      "SELECT email, name FROM users WHERE email = ?"
-    ).bind(email).first();
-
-    return jsonResponse(
-      {
-        authenticated: true,
-        user: {
-          email,
-          name: String(user?.name || getDisplayNameFromEmail(email)).trim()
-        }
-      },
-      200,
-      [...context.cookies, buildSessionCookie(sessionId), buildGuestCookie(nextGuestId)]
-    );
   }
 
   if (pathname === "/api/auth/register" && request.method === "POST") {
@@ -763,83 +708,6 @@ function parseCookies(cookieHeader) {
   }, {});
 }
 
-async function sendVerificationCode(env, email) {
-  const apiKey = String(env.RESEND_API_KEY || "").trim();
-  if (!apiKey) {
-    throw new Error("Email delivery is not configured.");
-  }
-
-  const code = generateVerificationCode();
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + VERIFICATION_CODE_TTL_MS).toISOString();
-
-  await env.DB.prepare(
-    `INSERT INTO verification_codes (email, code, expires_at, created_at, attempts)
-     VALUES (?, ?, ?, ?, 0)
-     ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at, created_at = excluded.created_at, attempts = 0`
-  ).bind(email, code, expiresAt, now.toISOString()).run();
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      Accept: "application/json"
-    },
-    body: JSON.stringify({
-      from: "Freshness Above All <onboarding@resend.dev>",
-      to: [email],
-      subject: "Your Freshness Above All verification code",
-      html: `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">
-        <p>Your verification code is:</p>
-        <p style="font-size:32px;font-weight:700;letter-spacing:0.35em;margin:16px 0">${code}</p>
-        <p>This code expires in 10 minutes.</p>
-      </div>`
-    })
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      response.status === 403
-        ? "Email sending is in test mode. Resend can only send to your own email until you verify a domain."
-        : `Failed to send verification email: ${errorText || response.status}`
-    );
-  }
-}
-
-async function verifyStoredCode(env, email, submittedCode) {
-  const record = await env.DB.prepare(
-    "SELECT code, expires_at, attempts FROM verification_codes WHERE email = ?"
-  ).bind(email).first();
-
-  if (!record) {
-    throw new Error("Verification code expired or was not requested.");
-  }
-
-  if (new Date(record.expires_at).getTime() <= Date.now()) {
-    await env.DB.prepare("DELETE FROM verification_codes WHERE email = ?").bind(email).run();
-    throw new Error("Verification code expired. Request a new one.");
-  }
-
-  if (Number(record.attempts || 0) >= 5) {
-    await env.DB.prepare("DELETE FROM verification_codes WHERE email = ?").bind(email).run();
-    throw new Error("Too many failed attempts. Request a new code.");
-  }
-
-  if (String(record.code) !== submittedCode) {
-    await env.DB.prepare(
-      "UPDATE verification_codes SET attempts = attempts + 1 WHERE email = ?"
-    ).bind(email).run();
-    throw new Error("Incorrect verification code.");
-  }
-
-  await env.DB.prepare("DELETE FROM verification_codes WHERE email = ?").bind(email).run();
-}
-
-function generateVerificationCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
 
 async function buildRequestContext(request, env) {
   const session = await getCurrentSession(request, env);

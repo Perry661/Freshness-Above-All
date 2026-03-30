@@ -44,11 +44,3 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email);
-
-CREATE TABLE IF NOT EXISTS verification_codes (
-  email TEXT PRIMARY KEY,
-  code TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0
-);

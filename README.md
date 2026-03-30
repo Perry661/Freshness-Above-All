@@ -60,25 +60,6 @@ npx wrangler d1 execute DB --remote --file=seed.sql
 npm run deploy
 ```
 
-### Email Verification Setup
-
-1. Add your Resend API key as a Worker secret:
-
-```bash
-npx wrangler secret put RESEND_API_KEY
-```
-
-2. Apply the latest schema so `verification_codes` exists:
-
-```bash
-npm run db:migrate:remote
-```
-
-3. Deploy again:
-
-```bash
-npm run deploy
-```
 
 
 ## Local Development

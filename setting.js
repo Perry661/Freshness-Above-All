@@ -176,11 +176,11 @@
   }
 
   function renderAuthSheet(state, escapeHtml) {
-    const verifyingCode = Boolean(state.authPendingEmail);
-    const title = verifyingCode ? "Enter Verification Code" : "Login or Sign Up";
-    const subtitle = verifyingCode
-      ? `We sent a 6-digit code to ${escapeHtml(state.authPendingEmail || state.authEmail || "")}.`
-      : "Enter your email to receive a verification code.";
+    const loginActive = state.authMode !== "register";
+    const title = loginActive ? "Login" : "Sign Up";
+    const subtitle = loginActive
+      ? "Use an email you've already registered on this device."
+      : "Create a local account with your email.";
 
     return `
       <div id="auth-sheet-overlay" class="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-0">
@@ -198,40 +198,21 @@
                 <span class="material-symbols-outlined text-slate-400">close</span>
               </button>
             </div>
+            <div class="mt-6 grid grid-cols-2 gap-3 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800">
+              <button type="button" data-auth-mode="login" class="rounded-xl px-4 py-2 text-sm font-semibold ${loginActive ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 dark:text-slate-300"}">Login</button>
+              <button type="button" data-auth-mode="register" class="rounded-xl px-4 py-2 text-sm font-semibold ${!loginActive ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-500 dark:text-slate-300"}">Sign Up</button>
+            </div>
             <form id="auth-form" class="mt-6 space-y-4">
               <label class="grid gap-2">
                 <span class="text-sm font-bold uppercase tracking-wider text-slate-500">Email</span>
-                <input id="auth-email-input" name="authEmail" type="email" value="${escapeHtml(verifyingCode ? state.authPendingEmail || state.authEmail || "" : state.authEmail || "")}" ${verifyingCode ? "readonly" : ""} required class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-primary focus:bg-white read-only:cursor-not-allowed read-only:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:read-only:bg-slate-800/60" placeholder="you@example.com" />
+                <input id="auth-email-input" name="authEmail" type="email" value="${escapeHtml(state.authEmail || "")}" required class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-primary focus:bg-white dark:border-slate-700 dark:bg-slate-800" placeholder="you@example.com" />
               </label>
-              ${verifyingCode
-                ? `
-                  <label class="grid gap-2">
-                    <span class="text-sm font-bold uppercase tracking-wider text-slate-500">Verification Code</span>
-                    <input id="auth-code-input" name="authCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" value="${escapeHtml(state.authCode || "")}" required class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm tracking-[0.35em] outline-none transition focus:border-primary focus:bg-white dark:border-slate-700 dark:bg-slate-800" placeholder="123456" />
-                  </label>
-                `
-                : ""}
-              ${state.authMessage
-                ? `<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">${escapeHtml(state.authMessage)}</div>`
-                : ""}
               ${state.authError
                 ? `<div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">${escapeHtml(state.authError)}</div>`
                 : ""}
               <button type="submit" class="w-full rounded-xl bg-primary py-4 font-bold text-slate-900 shadow-lg shadow-primary/20 transition-opacity hover:opacity-90">
-                ${verifyingCode ? "Verify and Continue" : "Send Verification Code"}
+                ${loginActive ? "Login with Email" : "Create Account"}
               </button>
-              ${verifyingCode
-                ? `
-                  <div class="grid grid-cols-2 gap-3">
-                    <button type="button" id="resend-auth-code" class="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                      Resend Code
-                    </button>
-                    <button type="button" id="change-auth-email" class="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                      Use Another Email
-                    </button>
-                  </div>
-                `
-                : ""}
             </form>
           </div>
         </div>
