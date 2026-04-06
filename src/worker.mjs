@@ -15,6 +15,16 @@ const DEFAULT_ADD_SETTINGS = {
 const SESSION_COOKIE = "freshtracker_session";
 const GUEST_COOKIE = "freshtracker_guest";
 const LEGACY_OWNER = { type: "guest", id: "legacy-import" };
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAILY_SUMMARY_NOTIFICATION_TYPE = "daily-summary";
+const DAILY_SUMMARY_URL = "/";
+const WEB_PUSH_RECORD_SIZE = 4096;
+const WEB_PUSH_TTL_SECONDS = 60 * 60;
+const REMINDER_RULES = {
+  light: { before: [7, 1, 0], overdue: [] },
+  standard: { before: [7, 3, 1, 0], overdue: [-1, -3] },
+  high: { before: [7, 6, 5, 4, 3, 2, 1, 0], overdue: [-1, -2, -3, -5] }
+};
 
 export default {
   async fetch(request, env) {
@@ -29,9 +39,19 @@ export default {
     } catch (error) {
       return jsonResponse(
         { error: error?.message || "Internal server error" },
-        500
+        getErrorStatus(error)
       );
     }
+  },
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(
+      processScheduledNotifications(
+        env,
+        new Date(controller?.scheduledTime || Date.now())
+      ).catch((error) => {
+        console.error("Scheduled notification processing failed", error);
+      })
+    );
   }
 };
 
@@ -193,6 +213,120 @@ async function handleApi(request, env, url) {
     return jsonResponse(await getAuthSession(request, env), 200, context.cookies);
   }
 
+  if (pathname === "/api/notifications/public-key" && request.method === "GET") {
+    return jsonResponse({ publicKey: getVapidPublicKey(env) }, 200, context.cookies);
+  }
+
+  if (pathname === "/api/notifications/subscription" && request.method === "GET") {
+    return jsonResponse(
+      await getPushSubscriptionStatus(
+        env,
+        requireAuthenticatedSession(context.session),
+        context.deviceId
+      ),
+      200,
+      context.cookies
+    );
+  }
+
+  if (pathname === "/api/notifications/subscription" && request.method === "POST") {
+    const body = await readBody(request);
+    const saved = await savePushSubscription(
+      env,
+      requireAuthenticatedSession(context.session),
+      context.deviceId,
+      body,
+      request.headers.get("user-agent") || ""
+    );
+    return jsonResponse(saved, 201, context.cookies);
+  }
+
+  if (pathname === "/api/notifications/subscription" && request.method === "DELETE") {
+    const body = await readBody(request);
+    await deletePushSubscription(
+      env,
+      requireAuthenticatedSession(context.session),
+      context.deviceId,
+      body?.endpoint || ""
+    );
+    return jsonResponse({ success: true }, 200, context.cookies);
+  }
+
+  if (
+    pathname === "/api/debug/notification-preview" &&
+    request.method === "GET" &&
+    isDebugNotificationPreviewEnabled(env)
+  ) {
+    const session = requireAuthenticatedSession(context.session);
+    const previewAt = url.searchParams.get("at");
+    const now = previewAt ? parseDebugDate(previewAt) : new Date();
+    const email = normalizeEmail(session.email);
+    const payload = await buildDailySummaryPayloadForEmail(env, email, now);
+    const settings = await readState(env, { type: "user", id: email }, "settings", DEFAULT_SETTINGS);
+    return jsonResponse(
+      {
+        dateKey: getLocalDateKey(now),
+        reminderStrategy: normalizeReminderStrategy(settings?.reminderStrategy),
+        payload
+      },
+      200,
+      context.cookies
+    );
+  }
+
+  if (
+    pathname === "/api/debug/notification-send-now" &&
+    (request.method === "POST" || request.method === "GET") &&
+    isDebugNotificationPreviewEnabled(env)
+  ) {
+    const session = requireAuthenticatedSession(context.session);
+    const email = normalizeEmail(session.email);
+    const payload = await buildDailySummaryPayloadForEmail(env, email, new Date());
+
+    if (!payload) {
+      return jsonResponse(
+        { success: false, error: "No reminder payload is available for this account today." },
+        200,
+        context.cookies
+      );
+    }
+
+    const subscriptions = await listPushSubscriptionsForEmail(env, email);
+    if (!subscriptions.length) {
+      return jsonResponse(
+        { success: false, error: "No active push subscription is registered for this account." },
+        200,
+        context.cookies
+      );
+    }
+
+    let sentCount = 0;
+
+    for (const subscription of subscriptions) {
+      try {
+        await sendWebPushToSubscription(env, subscription, payload);
+        sentCount += 1;
+      } catch (error) {
+        if (error?.code === "INVALID_SUBSCRIPTION") {
+          await deletePushSubscriptionByEndpoint(env, email, subscription.endpoint);
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    return jsonResponse(
+      {
+        success: sentCount > 0,
+        sentCount,
+        payload
+      },
+      200,
+      context.cookies
+    );
+  }
+
   if (pathname === "/api/auth/register" && request.method === "POST") {
     const email = validateAuthPayload(await readBody(request));
     const existing = await env.DB.prepare(
@@ -303,11 +437,17 @@ function jsonResponse(data, status = 200, cookies = []) {
   });
 }
 
+function getErrorStatus(error) {
+  return Number.isInteger(error?.status) ? error.status : 500;
+}
+
 async function readBody(request) {
   try {
     return await request.json();
   } catch {
-    throw new Error("Invalid JSON body");
+    const error = new Error("Invalid JSON body");
+    error.status = 400;
+    throw error;
   }
 }
 
@@ -551,6 +691,216 @@ function validateAddSettings(settings) {
   };
 }
 
+function getLocalDateKey(date = new Date()) {
+  const normalized = normalizeCalendarDate(date);
+  return [
+    normalized.getUTCFullYear(),
+    String(normalized.getUTCMonth() + 1).padStart(2, "0"),
+    String(normalized.getUTCDate()).padStart(2, "0")
+  ].join("-");
+}
+
+function normalizeCalendarDate(date) {
+  const value = date instanceof Date ? date : new Date(date);
+  return new Date(
+    Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())
+  );
+}
+
+function parseFoodPayload(row) {
+  if (!row?.payload) {
+    return null;
+  }
+
+  try {
+    const item = JSON.parse(row.payload);
+    return item && typeof item === "object" ? item : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseExpiryDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function diffInDaysFromDate(expiryDate, now = new Date()) {
+  const target =
+    expiryDate instanceof Date ? normalizeCalendarDate(expiryDate) : parseExpiryDate(expiryDate);
+  if (!target) {
+    return null;
+  }
+
+  const today = normalizeCalendarDate(now);
+  return Math.round((target.getTime() - today.getTime()) / DAY_MS);
+}
+
+function normalizeReminderStrategy(strategy) {
+  return REMINDER_RULES[strategy] ? strategy : DEFAULT_SETTINGS.reminderStrategy;
+}
+
+function getReminderOffsets(strategy) {
+  const normalized = normalizeReminderStrategy(strategy);
+  return REMINDER_RULES[normalized];
+}
+
+function buildDailyReminderSummary(items, strategy, now = new Date()) {
+  const offsets = getReminderOffsets(strategy);
+  const allowedDays = new Set([...offsets.before, ...offsets.overdue]);
+  const candidates = [];
+
+  for (const item of items || []) {
+    const name = String(item?.name || "").trim();
+    const daysUntil = diffInDaysFromDate(item?.expiryDate, now);
+    if (!name || !Number.isInteger(daysUntil) || !allowedDays.has(daysUntil)) {
+      continue;
+    }
+
+    candidates.push({
+      id: String(item.id || "").trim(),
+      name,
+      expiryDate: item.expiryDate,
+      createdAt: item.createdAt,
+      daysUntil
+    });
+  }
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  candidates.sort(compareReminderCandidates);
+
+  const expiredTodayCount = candidates.filter((item) => item.daysUntil === 0).length;
+  const expiringSoonCount = candidates.filter((item) => item.daysUntil > 0).length;
+  const overdueCount = candidates.filter((item) => item.daysUntil < 0).length;
+
+  return {
+    title: buildReminderTitle(expiredTodayCount, expiringSoonCount, overdueCount),
+    body: buildReminderBody(candidates, expiredTodayCount, expiringSoonCount, overdueCount),
+    data: {
+      url: DAILY_SUMMARY_URL,
+      expiredTodayCount,
+      expiringSoonCount,
+      overdueCount,
+      dateKey: getLocalDateKey(now),
+      notificationType: DAILY_SUMMARY_NOTIFICATION_TYPE
+    }
+  };
+}
+
+function compareReminderCandidates(a, b) {
+  const categoryDiff = getReminderCategoryRank(a.daysUntil) - getReminderCategoryRank(b.daysUntil);
+  if (categoryDiff !== 0) {
+    return categoryDiff;
+  }
+
+  if (a.daysUntil < 0 && b.daysUntil < 0) {
+    const overdueDiff = Math.abs(a.daysUntil) - Math.abs(b.daysUntil);
+    if (overdueDiff !== 0) {
+      return overdueDiff;
+    }
+  } else if (a.daysUntil > 0 && b.daysUntil > 0) {
+    const soonDiff = a.daysUntil - b.daysUntil;
+    if (soonDiff !== 0) {
+      return soonDiff;
+    }
+  }
+
+  const createdAtDiff =
+    new Date(String(b.createdAt || 0)).getTime() - new Date(String(a.createdAt || 0)).getTime();
+  if (createdAtDiff !== 0) {
+    return createdAtDiff;
+  }
+
+  return a.name.localeCompare(b.name);
+}
+
+function getReminderCategoryRank(daysUntil) {
+  if (daysUntil === 0) {
+    return 0;
+  }
+  if (daysUntil < 0) {
+    return 1;
+  }
+  return 2;
+}
+
+function buildReminderTitle(expiredTodayCount, expiringSoonCount, overdueCount) {
+  void expiringSoonCount;
+  void overdueCount;
+  return `Today ${expiredTodayCount} food${expiredTodayCount === 1 ? "" : "s"} expire${expiredTodayCount === 1 ? "s" : ""}`;
+}
+
+function buildReminderBody(candidates, expiredTodayCount, expiringSoonCount, overdueCount) {
+  const names = candidates.map((item) => item.name).filter(Boolean);
+  const leadCount = Math.min(names.length, 3);
+  const leadNames = names.slice(0, leadCount);
+  const remainingCount = names.length - leadCount;
+  const leadText = joinReminderNames(leadNames);
+  const subject = leadText
+    ? remainingCount > 0
+      ? `${leadText} and ${remainingCount} more`
+      : leadText
+    : `${candidates.length} food${candidates.length === 1 ? "" : "s"}`;
+  const plural = remainingCount > 0 || leadNames.length !== 1;
+
+  if (overdueCount > 0 && expiredTodayCount === 0 && expiringSoonCount === 0) {
+    return `${subject} ${plural ? "are" : "is"} overdue for cleanup.`;
+  }
+
+  if (overdueCount > 0) {
+    return `${subject} ${plural ? "need" : "needs"} attention, including overdue items.`;
+  }
+
+  if (expiredTodayCount > 0) {
+    return `${subject} ${plural ? "need" : "needs"} attention today.`;
+  }
+
+  return `${subject} ${plural ? "need" : "needs"} attention soon.`;
+}
+
+function joinReminderNames(names) {
+  if (!names.length) {
+    return "";
+  }
+  if (names.length === 1) {
+    return names[0];
+  }
+  if (names.length === 2) {
+    return `${names[0]} and ${names[1]}`;
+  }
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+function parseDebugDate(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    const error = new Error("Invalid debug preview date");
+    error.status = 400;
+    throw error;
+  }
+  return parsed;
+}
+
 function mapOpenFoodFactsProduct(code, payload) {
   const product = payload?.product;
   if (!product) {
@@ -632,6 +982,697 @@ function mapCategory(primaryTag, fallbackLabel) {
   return "other";
 }
 
+function requireAuthenticatedSession(session) {
+  if (!session?.email) {
+    const error = new Error("Sign in to enable browser notifications.");
+    error.status = 401;
+    throw error;
+  }
+
+  return session;
+}
+
+async function getPushSubscriptionStatus(env, session, deviceId) {
+  const email = normalizeEmail(session.email);
+  const deviceKey = getPushDeviceStateKey(deviceId);
+  const storedEndpoint = await readState(
+    env,
+    { type: "user", id: email },
+    deviceKey,
+    null
+  );
+  const endpoint = typeof storedEndpoint === "string" ? storedEndpoint.trim() : "";
+  let row = null;
+
+  if (endpoint) {
+    row = await env.DB.prepare(
+      `SELECT endpoint
+       FROM push_subscriptions
+       WHERE email = ? AND endpoint = ?
+       LIMIT 1`
+    ).bind(email, endpoint).first();
+  }
+
+  return {
+    supported: Boolean(getVapidPublicKey(env)),
+    subscribed: Boolean(row?.endpoint),
+    endpoint: row?.endpoint ? String(row.endpoint) : null
+  };
+}
+
+function getVapidPublicKey(env) {
+  return String(env?.VAPID_PUBLIC_KEY || "").trim();
+}
+
+function isDebugNotificationPreviewEnabled(env) {
+  return String(env?.ALLOW_DEBUG_NOTIFICATION_PREVIEW || "").trim() === "true";
+}
+
+function getVapidConfig(env) {
+  const publicKey = getVapidPublicKey(env);
+  const privateKey = String(env?.VAPID_PRIVATE_KEY || "").trim();
+  const subject = String(env?.VAPID_SUBJECT || "").trim();
+
+  return {
+    publicKey,
+    privateKey,
+    subject,
+    valid: Boolean(publicKey && privateKey && subject)
+  };
+}
+
+async function savePushSubscription(env, session, deviceId, subscription, userAgent) {
+  const normalized = validatePushSubscription(subscription);
+  const email = normalizeEmail(session.email);
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT INTO push_subscriptions (email, endpoint, subscription_json, user_agent, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(email, endpoint) DO UPDATE SET
+       subscription_json = excluded.subscription_json,
+       user_agent = excluded.user_agent,
+       updated_at = excluded.updated_at`
+  ).bind(
+    email,
+    normalized.endpoint,
+    JSON.stringify(normalized),
+    String(userAgent || ""),
+    now,
+    now
+  ).run();
+
+  await writeState(
+    env,
+    { type: "user", id: email },
+    getPushDeviceStateKey(deviceId),
+    normalized.endpoint
+  );
+
+  return {
+    supported: true,
+    subscribed: true,
+    endpoint: normalized.endpoint
+  };
+}
+
+async function deletePushSubscription(env, session, deviceId, endpoint) {
+  const normalizedEndpoint = String(endpoint || "").trim();
+  if (!normalizedEndpoint) {
+    const error = new Error("Invalid push subscription payload: endpoint");
+    error.status = 400;
+    throw error;
+  }
+
+  await env.DB.prepare(
+    "DELETE FROM push_subscriptions WHERE email = ? AND endpoint = ?"
+  ).bind(normalizeEmail(session.email), normalizedEndpoint).run();
+
+  const email = normalizeEmail(session.email);
+  const deviceKey = getPushDeviceStateKey(deviceId);
+  const storedEndpoint = await readState(
+    env,
+    { type: "user", id: email },
+    deviceKey,
+    null
+  );
+
+  if (typeof storedEndpoint === "string" && storedEndpoint.trim() === normalizedEndpoint) {
+    await env.DB.prepare(
+      "DELETE FROM app_state WHERE owner_type = 'user' AND owner_id = ? AND key = ?"
+    ).bind(email, deviceKey).run();
+  }
+}
+
+function getPushDeviceStateKey(deviceId) {
+  return `push-device:${String(deviceId || "").trim()}`;
+}
+
+function validatePushSubscription(subscription) {
+  if (!subscription || typeof subscription !== "object") {
+    const error = new Error("Invalid push subscription payload");
+    error.status = 400;
+    throw error;
+  }
+
+  const endpoint = normalizePushEndpoint(subscription.endpoint);
+  const keys = subscription.keys;
+  const p256dh = String(keys?.p256dh || "").trim();
+  const auth = String(keys?.auth || "").trim();
+  const expirationTime =
+    subscription.expirationTime === null || typeof subscription.expirationTime === "undefined"
+      ? null
+      : Number(subscription.expirationTime);
+
+  if (!endpoint || !p256dh || !auth) {
+    const error = new Error("Invalid push subscription payload");
+    error.status = 400;
+    throw error;
+  }
+
+  if (expirationTime !== null && !Number.isFinite(expirationTime)) {
+    const error = new Error("Invalid push subscription payload");
+    error.status = 400;
+    throw error;
+  }
+
+  return {
+    endpoint,
+    expirationTime,
+    keys: {
+      p256dh,
+      auth
+    }
+  };
+}
+
+async function buildDailySummaryPayloadForEmail(env, email, now = new Date()) {
+  const normalizedEmail = normalizeEmail(email);
+  const [foods, settings] = await Promise.all([
+    listFoodsForEmail(env, normalizedEmail),
+    readState(env, { type: "user", id: normalizedEmail }, "settings", DEFAULT_SETTINGS)
+  ]);
+
+  return buildDailyReminderSummary(
+    foods,
+    normalizeReminderStrategy(settings?.reminderStrategy),
+    now
+  );
+}
+
+async function processScheduledNotifications(env, now = new Date()) {
+  const vapid = getVapidConfig(env);
+  const dateKey = getLocalDateKey(now);
+
+  if (!vapid.valid) {
+    console.log(`Skipping scheduled notifications for ${dateKey}: missing VAPID configuration`);
+    return {
+      dateKey,
+      skipped: true,
+      reason: "missing-vapid-config"
+    };
+  }
+
+  const emails = await listUsersWithPushSubscriptions(env);
+  const result = {
+    dateKey,
+    usersChecked: emails.length,
+    usersSent: 0,
+    usersSkipped: 0,
+    usersFailed: 0,
+    subscriptionsCleaned: 0
+  };
+
+  for (const email of emails) {
+    try {
+      const payload = await buildDailySummaryPayloadForEmail(env, email, now);
+      if (!payload) {
+        result.usersSkipped += 1;
+        continue;
+      }
+
+      const subscriptions = await listPushSubscriptionsForEmail(env, email);
+      if (!subscriptions.length) {
+        result.usersSkipped += 1;
+        continue;
+      }
+
+      const reserved = await reserveNotificationDelivery(
+        env,
+        email,
+        dateKey,
+        DAILY_SUMMARY_NOTIFICATION_TYPE
+      );
+      if (!reserved) {
+        result.usersSkipped += 1;
+        continue;
+      }
+
+      try {
+        let sentCount = 0;
+
+        for (const subscription of subscriptions) {
+          try {
+            await sendWebPushToSubscription(env, subscription, payload);
+            sentCount += 1;
+          } catch (error) {
+            if (error?.code === "INVALID_SUBSCRIPTION") {
+              await deletePushSubscriptionByEndpoint(env, email, subscription.endpoint);
+              result.subscriptionsCleaned += 1;
+              continue;
+            }
+
+            console.error(`Push delivery failed for ${email}`, error);
+          }
+        }
+
+        if (!sentCount) {
+          await releaseNotificationDeliveryReservation(
+            env,
+            email,
+            dateKey,
+            DAILY_SUMMARY_NOTIFICATION_TYPE
+          );
+          result.usersFailed += 1;
+          continue;
+        }
+
+        await commitNotificationDelivery(
+          env,
+          email,
+          dateKey,
+          DAILY_SUMMARY_NOTIFICATION_TYPE,
+          payload
+        );
+        result.usersSent += 1;
+      } catch (error) {
+        await releaseNotificationDeliveryReservation(
+          env,
+          email,
+          dateKey,
+          DAILY_SUMMARY_NOTIFICATION_TYPE
+        );
+        throw error;
+      }
+    } catch (error) {
+      result.usersFailed += 1;
+      console.error(`Scheduled notification processing failed for ${email}`, error);
+    }
+  }
+
+  console.log("Scheduled notification summary", result);
+  return result;
+}
+
+async function listUsersWithPushSubscriptions(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT email
+     FROM push_subscriptions
+     ORDER BY email ASC`
+  ).all();
+
+  return (results || [])
+    .map((row) => normalizeEmail(row.email))
+    .filter(Boolean);
+}
+
+async function listFoodsForEmail(env, email) {
+  const { results } = await env.DB.prepare(
+    `SELECT payload
+     FROM foods
+     WHERE owner_type = 'user' AND owner_id = ?
+     ORDER BY created_at DESC, rowid DESC`
+  ).bind(email).all();
+
+  return (results || []).map(parseFoodPayload).filter(Boolean);
+}
+
+async function listPushSubscriptionsForEmail(env, email) {
+  const { results } = await env.DB.prepare(
+    `SELECT endpoint, subscription_json
+     FROM push_subscriptions
+     WHERE email = ?
+     ORDER BY updated_at DESC, endpoint ASC`
+  ).bind(email).all();
+
+  return (results || [])
+    .map((row) => {
+      try {
+        const parsed = JSON.parse(row.subscription_json);
+        return validatePushSubscription(parsed);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+async function reserveNotificationDelivery(env, email, dateKey, type) {
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO notification_deliveries
+      (email, delivery_date, notification_type, payload_json, sent_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(
+    email,
+    dateKey,
+    type,
+    JSON.stringify({ status: "pending" }),
+    ""
+  ).run();
+
+  return Number(result?.meta?.changes || 0) > 0;
+}
+
+async function commitNotificationDelivery(env, email, dateKey, type, payload) {
+  await env.DB.prepare(
+    `UPDATE notification_deliveries
+     SET payload_json = ?, sent_at = ?
+     WHERE email = ? AND delivery_date = ? AND notification_type = ?`
+  ).bind(
+    JSON.stringify(payload),
+    new Date().toISOString(),
+    email,
+    dateKey,
+    type
+  ).run();
+}
+
+async function releaseNotificationDeliveryReservation(env, email, dateKey, type) {
+  await env.DB.prepare(
+    `DELETE FROM notification_deliveries
+     WHERE email = ? AND delivery_date = ? AND notification_type = ? AND sent_at = ?`
+  ).bind(
+    email,
+    dateKey,
+    type,
+    ""
+  ).run();
+}
+
+async function deletePushSubscriptionByEndpoint(env, email, endpoint) {
+  await env.DB.prepare(
+    "DELETE FROM push_subscriptions WHERE email = ? AND endpoint = ?"
+  ).bind(email, endpoint).run();
+}
+
+async function sendWebPushToSubscription(env, subscription, payload) {
+  const vapid = getVapidConfig(env);
+  if (!vapid.valid) {
+    return false;
+  }
+
+  const endpointUrl = new URL(normalizePushEndpoint(subscription.endpoint));
+  const audience = `${endpointUrl.protocol}//${endpointUrl.host}`;
+  const authorization = await createVapidAuthorizationHeader(
+    audience,
+    vapid.subject,
+    vapid.publicKey,
+    vapid.privateKey
+  );
+  const encrypted = await encryptWebPushPayload(subscription, JSON.stringify(payload));
+  const response = await fetch(subscription.endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: authorization,
+      "Crypto-Key": `p256ecdsa=${vapid.publicKey}`,
+      TTL: String(WEB_PUSH_TTL_SECONDS),
+      Urgency: "normal",
+      "Content-Encoding": "aes128gcm",
+      "Content-Type": "application/octet-stream"
+    },
+    body: encrypted
+  });
+
+  if (response.status === 404 || response.status === 410) {
+    const error = new Error(`Push subscription is no longer valid (${response.status})`);
+    error.code = "INVALID_SUBSCRIPTION";
+    throw error;
+  }
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(
+      `Push delivery failed: ${response.status}${detail ? ` ${detail.slice(0, 200)}` : ""}`
+    );
+  }
+
+  return true;
+}
+
+function normalizePushEndpoint(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || "").trim());
+  } catch {
+    const error = new Error("Invalid push subscription payload: endpoint");
+    error.status = 400;
+    throw error;
+  }
+
+  if (parsed.protocol !== "https:") {
+    const error = new Error("Invalid push subscription payload: endpoint");
+    error.status = 400;
+    throw error;
+  }
+
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+async function createVapidAuthorizationHeader(audience, subject, publicKey, privateKey) {
+  const encodedHeader = bytesToBase64Url(
+    new TextEncoder().encode(JSON.stringify({ typ: "JWT", alg: "ES256" }))
+  );
+  const encodedClaims = bytesToBase64Url(
+    new TextEncoder().encode(
+      JSON.stringify({
+        aud: audience,
+        exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
+        sub: subject
+      })
+    )
+  );
+  const signingInput = `${encodedHeader}.${encodedClaims}`;
+  const signature = await signVapidJwt(signingInput, publicKey, privateKey);
+  return `vapid t=${signingInput}.${signature}, k=${publicKey}`;
+}
+
+async function signVapidJwt(input, publicKey, privateKey) {
+  const signingKey = await importVapidPrivateKey(publicKey, privateKey);
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    signingKey,
+    new TextEncoder().encode(input)
+  ));
+  if (signature.length === 64) {
+    return bytesToBase64Url(signature);
+  }
+  return derSignatureToBase64Url(signature, 64);
+}
+
+async function importVapidPrivateKey(publicKey, privateKey) {
+  const publicBytes = base64UrlToBytes(publicKey);
+  const privateBytes = base64UrlToBytes(privateKey);
+
+  if (publicBytes.length !== 65 || publicBytes[0] !== 4 || privateBytes.length !== 32) {
+    throw new Error("Invalid VAPID key material");
+  }
+
+  return crypto.subtle.importKey(
+    "jwk",
+    {
+      kty: "EC",
+      crv: "P-256",
+      x: bytesToBase64Url(publicBytes.slice(1, 33)),
+      y: bytesToBase64Url(publicBytes.slice(33, 65)),
+      d: bytesToBase64Url(privateBytes),
+      ext: true
+    },
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"]
+  );
+}
+
+async function encryptWebPushPayload(subscription, payload) {
+  const applicationServerKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    true,
+    ["deriveBits"]
+  );
+  const applicationServerPublicKey = new Uint8Array(
+    await crypto.subtle.exportKey("raw", applicationServerKeyPair.publicKey)
+  );
+  const userPublicKeyBytes = base64UrlToBytes(subscription.keys.p256dh);
+  const userPublicKey = await crypto.subtle.importKey(
+    "raw",
+    userPublicKeyBytes,
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    []
+  );
+  const sharedSecret = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "ECDH", public: userPublicKey },
+      applicationServerKeyPair.privateKey,
+      256
+    )
+  );
+  const authSecret = base64UrlToBytes(subscription.keys.auth);
+  const keyInfo = concatBytes(
+    new TextEncoder().encode("WebPush: info\u0000"),
+    userPublicKeyBytes,
+    applicationServerPublicKey
+  );
+  const ikmSeed = await hmacSha256(authSecret, sharedSecret);
+  const ikm = await hmacSha256(ikmSeed, concatBytes(keyInfo, new Uint8Array([1])));
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const contentPrk = await hmacSha256(salt, ikm);
+  const contentEncryptionKey = (
+    await hmacSha256(
+      contentPrk,
+      concatBytes(
+        new TextEncoder().encode("Content-Encoding: aes128gcm\u0000"),
+        new Uint8Array([1])
+      )
+    )
+  ).slice(0, 16);
+  const nonce = (
+    await hmacSha256(
+      contentPrk,
+      concatBytes(
+        new TextEncoder().encode("Content-Encoding: nonce\u0000"),
+        new Uint8Array([1])
+      )
+    )
+  ).slice(0, 12);
+  const plaintext = concatBytes(new TextEncoder().encode(payload), new Uint8Array([2]));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    contentEncryptionKey,
+    "AES-GCM",
+    false,
+    ["encrypt"]
+  );
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, plaintext)
+  );
+
+  return concatBytes(
+    salt,
+    uint32ToBytes(WEB_PUSH_RECORD_SIZE),
+    new Uint8Array([applicationServerPublicKey.length]),
+    applicationServerPublicKey,
+    ciphertext
+  );
+}
+
+async function hmacSha256(keyBytes, dataBytes) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, dataBytes));
+}
+
+function concatBytes(...parts) {
+  const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+
+  return result;
+}
+
+function uint32ToBytes(value) {
+  return new Uint8Array([
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff
+  ]);
+}
+
+function base64UrlToBytes(value) {
+  const normalized = String(value || "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const decoded = atob(padded);
+  const bytes = new Uint8Array(decoded.length);
+
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function derSignatureToBase64Url(signature, outputLength) {
+  const bytes = new Uint8Array(signature);
+  let offset = 0;
+
+  if (bytes[offset++] !== 0x30) {
+    throw new Error("Invalid DER signature");
+  }
+
+  ({ offset } = readDerLength(bytes, offset));
+
+  if (bytes[offset++] !== 0x02) {
+    throw new Error("Invalid DER signature");
+  }
+
+  const rLengthInfo = readDerLength(bytes, offset);
+  const rLength = rLengthInfo.length;
+  offset = rLengthInfo.offset;
+  const r = bytes.slice(offset, offset + rLength);
+  offset += rLength;
+
+  if (bytes[offset++] !== 0x02) {
+    throw new Error("Invalid DER signature");
+  }
+
+  const sLengthInfo = readDerLength(bytes, offset);
+  const sLength = sLengthInfo.length;
+  offset = sLengthInfo.offset;
+  const s = bytes.slice(offset, offset + sLength);
+  const componentLength = outputLength / 2;
+
+  return bytesToBase64Url(
+    concatBytes(
+      trimAndPadDerInteger(r, componentLength),
+      trimAndPadDerInteger(s, componentLength)
+    )
+  );
+}
+
+function readDerLength(bytes, offset) {
+  const first = bytes[offset];
+  if (first < 0x80) {
+    return { length: first, offset: offset + 1 };
+  }
+
+  const byteCount = first & 0x7f;
+  let length = 0;
+
+  for (let index = 0; index < byteCount; index += 1) {
+    length = (length << 8) | bytes[offset + 1 + index];
+  }
+
+  return { length, offset: offset + 1 + byteCount };
+}
+
+function trimAndPadDerInteger(bytes, size) {
+  let value = bytes;
+  while (value.length > 1 && value[0] === 0) {
+    value = value.slice(1);
+  }
+
+  if (value.length > size) {
+    throw new Error("DER integer is too large");
+  }
+
+  const result = new Uint8Array(size);
+  result.set(value, size - value.length);
+  return result;
+}
+
 async function getAuthSession(request, env) {
   const session = await getCurrentSession(request, env);
   if (!session) {
@@ -710,17 +1751,7 @@ function parseCookies(cookieHeader) {
 
 
 async function buildRequestContext(request, env) {
-  const session = await getCurrentSession(request, env);
   const cookies = [];
-
-  if (session) {
-    return {
-      owner: { type: "user", id: normalizeEmail(session.email) },
-      session,
-      cookies
-    };
-  }
-
   const parsedCookies = parseCookies(request.headers.get("Cookie") || "");
   let guestId = parsedCookies[GUEST_COOKIE];
   if (!guestId) {
@@ -728,9 +1759,20 @@ async function buildRequestContext(request, env) {
     cookies.push(buildGuestCookie(guestId));
   }
 
+  const session = await getCurrentSession(request, env);
+
+  if (session) {
+    return {
+      owner: { type: "user", id: normalizeEmail(session.email) },
+      session,
+      cookies,
+      deviceId: guestId
+    };
+  }
+
   const owner = { type: "guest", id: guestId };
   await seedGuestFromLegacyIfNeeded(env, owner);
-  return { owner, session: null, cookies };
+  return { owner, session: null, cookies, deviceId: guestId };
 }
 
 async function seedGuestFromLegacyIfNeeded(env, owner) {

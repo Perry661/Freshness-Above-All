@@ -6,6 +6,7 @@ const publicDir = path.join(root, "public");
 
 const files = [
   "index.html",
+  "sw.js",
   "ui.js",
   "uiData.js",
   "add.js",

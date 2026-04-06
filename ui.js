@@ -42,6 +42,10 @@ const {
   lookupBarcode: lookupBarcodeFromApi,
   searchProductByName: searchProductByNameFromApi,
   fetchAuthSession: fetchAuthSessionFromApi,
+  fetchNotificationPublicKey: fetchNotificationPublicKeyFromApi,
+  fetchNotificationSubscription: fetchNotificationSubscriptionFromApi,
+  createNotificationSubscription: createNotificationSubscriptionFromApi,
+  deleteNotificationSubscription: deleteNotificationSubscriptionFromApi,
   registerWithEmail: registerWithEmailFromApi,
   loginWithEmail: loginWithEmailFromApi,
   logoutSession: logoutSessionFromApi,
@@ -162,6 +166,7 @@ const {
 const TESSERACT_CDN_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
 let tesseractScriptPromise = null;
 let tesseractWorkerPromise = null;
+let serviceWorkerRegistrationPromise = null;
 
 
 const state = {
@@ -218,6 +223,11 @@ const state = {
   authMode: "login",
   authEmail: "",
   authError: "",
+  notificationSupport: false,
+  notificationPermission: "default",
+  notificationSubscription: null,
+  notificationLoading: false,
+  notificationError: "",
   reminderDraft: null,
   cleanupDraft: null,
   lastRenderedView: "dashboard",
@@ -255,7 +265,7 @@ async function initApp() {
   setSoundVolume(state.settings.soundVolume);
   renderApp();
   bindEvents();
-  await Promise.all([refreshItems(), refreshTrashItems()]);
+  await Promise.all([refreshNotificationState(), refreshItems(), refreshTrashItems()]);
 }
 
 async function refreshItems() {
@@ -286,6 +296,209 @@ async function refreshTrashItems() {
     state.isTrashLoading = false;
     renderApp();
   }
+}
+
+async function ensureServiceWorkerRegistered() {
+  if (!("serviceWorker" in navigator)) {
+    return null;
+  }
+
+  if (!serviceWorkerRegistrationPromise) {
+    serviceWorkerRegistrationPromise = navigator.serviceWorker.register("./sw.js").catch((error) => {
+      serviceWorkerRegistrationPromise = null;
+      throw error;
+    });
+  }
+
+  return serviceWorkerRegistrationPromise;
+}
+
+function getNotificationPermissionState() {
+  return "Notification" in window ? Notification.permission : "unsupported";
+}
+
+async function refreshNotificationState() {
+  state.notificationPermission = getNotificationPermissionState();
+  state.notificationSupport =
+    state.notificationPermission !== "unsupported" &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window;
+  state.notificationSubscription = null;
+  state.notificationError = "";
+
+  if (!state.notificationSupport) {
+    renderApp();
+    return;
+  }
+
+  try {
+    const registration = await ensureServiceWorkerRegistered();
+    const subscription = await registration?.pushManager?.getSubscription();
+    state.notificationSubscription = serializePushSubscription(subscription);
+  } catch (error) {
+    console.warn("Failed to refresh notification state:", error);
+    if (state.account?.authenticated) {
+      state.notificationError = error.message;
+    }
+  }
+
+  renderApp();
+}
+
+async function subscribeCurrentDeviceToNotifications() {
+  if (!state.account?.authenticated) {
+    state.notificationError = "Sign in to enable browser notifications.";
+    renderApp();
+    return;
+  }
+
+  state.notificationLoading = true;
+  state.notificationError = "";
+  renderApp();
+
+  try {
+    if (getNotificationPermissionState() === "unsupported" || !("PushManager" in window)) {
+      throw new Error("This browser does not support push notifications.");
+    }
+
+    const requestedPermission =
+      state.notificationPermission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+    state.notificationPermission = requestedPermission;
+
+    if (requestedPermission !== "granted") {
+      throw new Error(
+        requestedPermission === "denied"
+          ? "Notifications are blocked in your browser settings."
+          : "Notification permission was not granted."
+      );
+    }
+
+    const registration = await ensureServiceWorkerRegistered();
+    if (!registration?.pushManager) {
+      throw new Error("Push notifications are not available in this browser.");
+    }
+
+    const { publicKey } = await fetchNotificationPublicKeyFromApi();
+    if (!publicKey) {
+      throw new Error("Push notifications are not configured on this server.");
+    }
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
+    }
+
+    await createNotificationSubscriptionFromApi(serializePushSubscription(subscription));
+    await refreshNotificationState();
+  } catch (error) {
+    state.notificationPermission = getNotificationPermissionState();
+    state.notificationError = error.message;
+    renderApp();
+  } finally {
+    state.notificationLoading = false;
+    renderApp();
+  }
+}
+
+async function unsubscribeCurrentDeviceFromNotifications() {
+  state.notificationLoading = true;
+  state.notificationError = "";
+  renderApp();
+
+  try {
+    const registration = await ensureServiceWorkerRegistered();
+    const subscription = await registration?.pushManager?.getSubscription();
+    let endpoint = "";
+
+    if (subscription) {
+      endpoint = String(subscription.endpoint || "").trim();
+      await subscription.unsubscribe();
+    } else if (state.account?.authenticated) {
+      const savedSubscription = await fetchNotificationSubscriptionFromApi();
+      endpoint = String(savedSubscription?.endpoint || "").trim();
+    }
+
+    if (state.account?.authenticated && endpoint) {
+      await deleteNotificationSubscriptionFromApi(endpoint);
+    }
+
+    await refreshNotificationState();
+  } catch (error) {
+    state.notificationPermission = getNotificationPermissionState();
+    state.notificationError = error.message;
+    renderApp();
+  } finally {
+    state.notificationLoading = false;
+    renderApp();
+  }
+}
+
+async function detachCurrentDeviceFromAccount() {
+  if (!state.account?.authenticated) {
+    return;
+  }
+
+  try {
+    const registration = await ensureServiceWorkerRegistered();
+    const subscription = await registration?.pushManager?.getSubscription();
+    const endpoint = String(subscription?.endpoint || "").trim();
+
+    if (endpoint) {
+      await deleteNotificationSubscriptionFromApi(endpoint);
+    }
+  } catch (error) {
+    console.warn("Failed to detach browser notifications from account:", error);
+  }
+}
+
+function serializePushSubscription(subscription) {
+  if (!subscription) {
+    return null;
+  }
+
+  if (typeof subscription.toJSON === "function") {
+    return subscription.toJSON();
+  }
+
+  return {
+    endpoint: String(subscription.endpoint || "").trim(),
+    expirationTime: subscription.expirationTime ?? null,
+    keys: {
+      p256dh: arrayBufferToBase64(subscription.getKey("p256dh")),
+      auth: arrayBufferToBase64(subscription.getKey("auth"))
+    }
+  };
+}
+
+function arrayBufferToBase64(buffer) {
+  if (!buffer) {
+    return "";
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
 }
 
 function renderApp() {
@@ -371,7 +584,7 @@ function renderHeader(stats) {
       <div class="mt-6 grid grid-cols-3 gap-3">
         ${renderStatCard("Expired", stats.expired, "red", "expired")}
         ${renderStatCard("Today", stats.today, "orange", "today")}
-        ${renderStatCard("3 Days", stats.threeDays, "amber", "threeDays")}
+        ${renderStatCard("LESS THAN 3 DAYS", stats.threeDays, "amber", "threeDays")}
       </div>
     </header>
   `;
@@ -463,15 +676,7 @@ function renderRecentItems(items) {
             Select one or more items, then choose <span class="font-semibold text-red-500">Delete</span> or <span class="font-semibold">Cancel</span>.
           </div>
         `
-        : `
-          <button
-            id="open-add-food"
-            class="mt-8 flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-4 font-bold text-white shadow-lg shadow-primary/20 transition hover:bg-primary/90"
-          >
-            <span class="material-symbols-outlined">add_circle</span>
-            Add New Item
-          </button>
-        `}
+        : ""}
     </main>
   `;
 }
@@ -702,6 +907,21 @@ async function handleClick(event) {
       return;
     }
     void handleDeleteAccount();
+    return;
+  }
+
+  if (event.target.closest("#enable-browser-notifications")) {
+    void subscribeCurrentDeviceToNotifications();
+    return;
+  }
+
+  if (event.target.closest("#disable-browser-notifications")) {
+    void unsubscribeCurrentDeviceFromNotifications();
+    return;
+  }
+
+  if (event.target.closest("#retry-browser-notifications")) {
+    void refreshNotificationState();
     return;
   }
 
@@ -2962,6 +3182,7 @@ async function handleAuthSubmit() {
       : await loginWithEmailFromApi(email);
     state.showAuthSheet = false;
     state.authEmail = state.account?.user?.email || "";
+    await refreshNotificationState();
   } catch (error) {
     state.authError = error.message;
   }
@@ -2971,7 +3192,9 @@ async function handleAuthSubmit() {
 
 async function handleLogout() {
   try {
+    await detachCurrentDeviceFromAccount();
     state.account = await logoutSessionFromApi();
+    await refreshNotificationState();
   } catch (error) {
     state.authError = error.message;
   }
@@ -2984,7 +3207,9 @@ async function handleLogout() {
 
 async function handleDeleteAccount() {
   try {
+    await detachCurrentDeviceFromAccount();
     state.account = await deleteCurrentAccountFromApi();
+    await refreshNotificationState();
   } catch (error) {
     state.authError = error.message;
   }

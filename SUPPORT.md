@@ -238,10 +238,39 @@ Yes.
 只要食材仍在 `Trash` 中，就可以将它恢复回主库存。如果 Trash 被手动清空，或超过自动删除期限，则可能无法恢复。  
 As long as the item is still in `Trash`, it can be restored to the main inventory. If Trash has been emptied manually or auto-deletion has already happened, recovery may no longer be possible.
 
-### Why are my reminders or calendar features limited? | 为什么提醒或日历功能看起来比较有限？
+### How do browser reminder notifications work? | 浏览器提醒通知是怎么工作的？
 
-当前版本中的提醒和日历功能仍以原型展示和界面组织为主，部分行为还没有实现成完整通知系统。  
-In the current version, reminder and calendar behavior is still mostly at the prototype and UI level, and not all interactions are implemented as a full notification system yet.
+当前版本支持浏览器推送提醒，但需要满足几个条件：  
+The current version supports browser push reminders, but a few conditions must be met:
+
+- 你必须先登录账号  
+  You must be signed in
+- 你必须在当前设备的 Settings 中手动开启 Browser Notifications  
+  You must explicitly enable Browser Notifications from Settings on the current device
+- 浏览器和系统都必须允许这个站点发送通知  
+  Both your browser and operating system must allow notifications for this site
+
+当前实现每天只发送一条汇总提醒。通知标题会显示“今天有多少个食物过期”，提醒策略会影响这条汇总里包含哪些食物。  
+The current implementation sends one summary reminder per day. The title shows how many foods expire today, and your reminder strategy affects which items are included in that summary.
+
+### Why am I not receiving reminder notifications? | 为什么我没有收到提醒通知？
+
+请检查以下几点：  
+Check the following:
+
+- 你是否已经登录  
+  Whether you are signed in
+- 你是否在当前浏览器里点击过 `Enable Notifications`  
+  Whether you clicked `Enable Notifications` in the current browser
+- 浏览器权限是否被拒绝  
+  Whether browser notification permission was denied
+- 系统通知是否被关闭  
+  Whether OS-level notifications are disabled
+- 你是否在另一台设备上开启了通知，而当前这台设备并没有开启  
+  Whether notifications were enabled on another device instead of this one
+
+如果你更换了浏览器、清除了站点数据，或者退出后换了别的账号，可能需要重新在当前设备上开启通知。  
+If you changed browsers, cleared site data, or signed out and switched accounts, you may need to enable notifications again on the current device.
 
 ### Why do I still see the previous account's data right after logging in or switching accounts? | 为什么登录或切换账号后，页面上还是上一个账号的数据？
 

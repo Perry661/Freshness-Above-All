@@ -14,6 +14,7 @@ The app includes a dashboard, an all-food inventory view, add/edit flows, a tras
 - Cleanup flow with deletion reason and optional notes
 - Trash page with restore support and deleted-item detail view
 - Settings page with reminder strategy, theme, and trash retention controls
+- Browser push notification opt-in for signed-in users on the current device
 - Barcode lookup via Open Food Facts for unknown products
 - Settings persistence via Cloudflare D1
 - Cloud-backed data persistence for foods, trash, and lightweight auth session state
@@ -58,6 +59,20 @@ npx wrangler d1 execute DB --remote --file=seed.sql
 
 ```bash
 npm run deploy
+```
+
+7. Configure browser push secrets and preview flag:
+
+```bash
+npx wrangler secret put VAPID_PRIVATE_KEY
+npx wrangler secret put VAPID_PUBLIC_KEY
+npx wrangler secret put VAPID_SUBJECT
+```
+
+Optional local/debug preview flag:
+
+```bash
+npx wrangler secret put ALLOW_DEBUG_NOTIFICATION_PREVIEW
 ```
 
 
@@ -146,6 +161,8 @@ The deployed app stores data in Cloudflare D1.
 - `trash_items` table stores deleted items waiting for permanent removal
 - `app_state` stores settings and add-settings payloads
 - `users` and `sessions` support the lightweight email-only auth flow
+- `push_subscriptions` stores per-user browser push endpoints
+- `notification_deliveries` stores daily notification send records for dedupe
 
 ## Interaction Highlights
 
@@ -153,6 +170,7 @@ The deployed app stores data in Cloudflare D1.
 - Restore an item from Trash back into the main inventory
 - Open food details by clicking the item icon or title in All Food
 - Save settings permanently through D1
+- Enable browser notifications from Settings when signed in
 - Use batch cleanup from the All Food inventory page
 
 ## Known Limitations
@@ -160,7 +178,9 @@ The deployed app stores data in Cloudflare D1.
 - Auth is still email-only and intentionally lightweight
 - Data model is still single-tenant and not scoped per account
 - No real image upload pipeline yet
-- Calendar / notification behavior is still mostly UI-level
+- Browser push notifications are signed-in only and device-specific
+- Daily reminder summaries are scheduled once per day and the title always reflects how many foods expire today
+- Cron timing is configured in UTC in [`wrangler.jsonc`](/Users/dongperry/code/Freshness-Above-All/wrangler.jsonc); if you need user-local send times, add timezone-aware scheduling later
 - Sound effects are planned but not implemented yet
 - Barcode scanning depends on browser support for `BarcodeDetector`, so Safari may require manual entry even when camera access works
 - Open Food Facts lookup depends on network availability and third-party data coverage

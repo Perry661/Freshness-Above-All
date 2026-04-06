@@ -186,6 +186,28 @@ function fetchAuthSession() {
   return request("/api/auth/session");
 }
 
+function fetchNotificationPublicKey() {
+  return request("/api/notifications/public-key");
+}
+
+function fetchNotificationSubscription() {
+  return request("/api/notifications/subscription");
+}
+
+function createNotificationSubscription(subscription) {
+  return request("/api/notifications/subscription", {
+    method: "POST",
+    body: JSON.stringify(subscription)
+  });
+}
+
+function deleteNotificationSubscription(endpoint) {
+  return request("/api/notifications/subscription", {
+    method: "DELETE",
+    body: JSON.stringify({ endpoint })
+  });
+}
+
 function registerWithEmail(email) {
   return request("/api/auth/register", {
     method: "POST",
@@ -279,6 +301,10 @@ window.FreshTrackerData = {
   deleteFoodItemOnServer,
   fetchSettings,
   fetchAuthSession,
+  fetchNotificationPublicKey,
+  fetchNotificationSubscription,
+  createNotificationSubscription,
+  deleteNotificationSubscription,
   registerWithEmail,
   loginWithEmail,
   logoutSession,

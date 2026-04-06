@@ -44,3 +44,30 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  email TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  subscription_json TEXT NOT NULL,
+  user_agent TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (email, endpoint),
+  FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_email
+  ON push_subscriptions(email);
+
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+  email TEXT NOT NULL,
+  delivery_date TEXT NOT NULL,
+  notification_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  sent_at TEXT NOT NULL,
+  PRIMARY KEY (email, delivery_date, notification_type),
+  FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_deliveries_email_date
+  ON notification_deliveries(email, delivery_date DESC);
