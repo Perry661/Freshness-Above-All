@@ -11,8 +11,6 @@
   // npx wrangler secret put VAPID_PUBLIC_KEY
   // npx wrangler secret put VAPID_PRIVATE_KEY
   // npx wrangler secret put VAPID_SUBJECT
-  // Optional:
-  // npx wrangler secret put ALLOW_DEBUG_NOTIFICATION_PREVIEW
   "assets": {
     "binding": "ASSETS",
     "directory": "./public"

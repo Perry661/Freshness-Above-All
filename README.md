@@ -61,22 +61,13 @@ npx wrangler d1 execute DB --remote --file=seed.sql
 npm run deploy
 ```
 
-7. Configure browser push secrets and preview flag:
+7. Configure browser push secrets:
 
 ```bash
 npx wrangler secret put VAPID_PRIVATE_KEY
 npx wrangler secret put VAPID_PUBLIC_KEY
 npx wrangler secret put VAPID_SUBJECT
 ```
-
-Optional local/debug preview flag:
-
-```bash
-npx wrangler secret put ALLOW_DEBUG_NOTIFICATION_PREVIEW
-```
-
-
-
 ## Local Development
 
 1. Apply the schema to the local D1 database:

@@ -252,81 +252,6 @@ async function handleApi(request, env, url) {
     return jsonResponse({ success: true }, 200, context.cookies);
   }
 
-  if (
-    pathname === "/api/debug/notification-preview" &&
-    request.method === "GET" &&
-    isDebugNotificationPreviewEnabled(env)
-  ) {
-    const session = requireAuthenticatedSession(context.session);
-    const previewAt = url.searchParams.get("at");
-    const now = previewAt ? parseDebugDate(previewAt) : new Date();
-    const email = normalizeEmail(session.email);
-    const payload = await buildDailySummaryPayloadForEmail(env, email, now);
-    const settings = await readState(env, { type: "user", id: email }, "settings", DEFAULT_SETTINGS);
-    return jsonResponse(
-      {
-        dateKey: getLocalDateKey(now),
-        reminderStrategy: normalizeReminderStrategy(settings?.reminderStrategy),
-        payload
-      },
-      200,
-      context.cookies
-    );
-  }
-
-  if (
-    pathname === "/api/debug/notification-send-now" &&
-    (request.method === "POST" || request.method === "GET") &&
-    isDebugNotificationPreviewEnabled(env)
-  ) {
-    const session = requireAuthenticatedSession(context.session);
-    const email = normalizeEmail(session.email);
-    const payload = await buildDailySummaryPayloadForEmail(env, email, new Date());
-
-    if (!payload) {
-      return jsonResponse(
-        { success: false, error: "No reminder payload is available for this account today." },
-        200,
-        context.cookies
-      );
-    }
-
-    const subscriptions = await listPushSubscriptionsForEmail(env, email);
-    if (!subscriptions.length) {
-      return jsonResponse(
-        { success: false, error: "No active push subscription is registered for this account." },
-        200,
-        context.cookies
-      );
-    }
-
-    let sentCount = 0;
-
-    for (const subscription of subscriptions) {
-      try {
-        await sendWebPushToSubscription(env, subscription, payload);
-        sentCount += 1;
-      } catch (error) {
-        if (error?.code === "INVALID_SUBSCRIPTION") {
-          await deletePushSubscriptionByEndpoint(env, email, subscription.endpoint);
-          continue;
-        }
-
-        throw error;
-      }
-    }
-
-    return jsonResponse(
-      {
-        success: sentCount > 0,
-        sentCount,
-        payload
-      },
-      200,
-      context.cookies
-    );
-  }
-
   if (pathname === "/api/auth/register" && request.method === "POST") {
     const email = validateAuthPayload(await readBody(request));
     const existing = await env.DB.prepare(
@@ -891,16 +816,6 @@ function joinReminderNames(names) {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-function parseDebugDate(value) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    const error = new Error("Invalid debug preview date");
-    error.status = 400;
-    throw error;
-  }
-  return parsed;
-}
-
 function mapOpenFoodFactsProduct(code, payload) {
   const product = payload?.product;
   if (!product) {
@@ -1022,10 +937,6 @@ async function getPushSubscriptionStatus(env, session, deviceId) {
 
 function getVapidPublicKey(env) {
   return String(env?.VAPID_PUBLIC_KEY || "").trim();
-}
-
-function isDebugNotificationPreviewEnabled(env) {
-  return String(env?.ALLOW_DEBUG_NOTIFICATION_PREVIEW || "").trim() === "true";
 }
 
 function getVapidConfig(env) {
